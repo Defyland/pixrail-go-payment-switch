@@ -38,16 +38,23 @@ create table payment_outbox (
   event_id text not null unique,
   event_type text not null,
   schema_version text not null,
+  occurred_at timestamptz not null,
+  producer text not null,
   tenant_id text not null,
   account_id text not null,
   pix_transfer_id text not null references pix_transfers(id),
   correlation_id text not null,
   payload jsonb not null,
+  published boolean not null default false,
   available_at timestamptz not null,
-  published_at timestamptz,
   attempts integer not null default 0,
-  last_error text not null default ''
+  last_error text not null default '',
+  dispatched_at timestamptz
 );
+
+create index payment_outbox_pending_idx
+  on payment_outbox (available_at, sequence)
+  where published = false;
 
 create table audit_records (
   id bigserial primary key,
@@ -73,9 +80,15 @@ create table processed_spi_callbacks (
 
 - Create transfer: insert transfer, audit record, and all outbox events in one transaction.
 - Settlement callback: lock transfer by tenant and ID, validate SPI message ID, guard terminal states, update transfer, insert audit record, and insert settlement event.
-- Outbox relay: publish pending events, then mark `published_at` after broker acknowledgement.
+- Outbox relay: publish pending events, then mark `published = true` and `dispatched_at` after publisher acknowledgement. Failures increment attempts, retain `last_error`, and move `available_at` forward.
 - Migration runner: `go run ./cmd/pixrail-migrate` applies the core schema against `PIXRAIL_DATABASE_URL`.
 
 ## Isolation and rollback
 
 Default `READ COMMITTED` is acceptable with unique constraints and row-level locks on settlement updates. Failed DICT or fraud calls happen before the transaction, so no partial transfer row is written. Failed outbox insert rolls back the transfer decision.
+
+## Runtime guardrails
+
+- `PIXRAIL_STORE_DRIVER=memory` is local/test only.
+- `PIXRAIL_STORE_DRIVER=postgres` requires `PIXRAIL_DATABASE_URL`.
+- `PIXRAIL_ENV=production` rejects memory storage.

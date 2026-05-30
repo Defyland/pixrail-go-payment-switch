@@ -32,7 +32,7 @@ Fintech teams often need to prove Pix transfer intake, DICT lookup behavior, fra
 
 ## Architecture overview
 
-PixRail is a modular monolith with explicit ports for DICT, antifraud, SPI, storage, rate limiting, and event publishing. The current runtime uses in-memory adapters so the product is runnable without cloud dependencies; the documented production boundary maps storage to PostgreSQL, buckets to Redis, and outbox delivery to a broker.
+PixRail is a modular monolith with explicit ports for DICT, antifraud, SPI, storage, rate limiting, and event publishing. The local runtime can use in-memory adapters so the product is runnable without cloud dependencies; the production path uses PostgreSQL for transfer, audit, and outbox durability, and keeps Redis/broker adapters as the next deployment hardening step.
 
 ```text
 Tenant API -> HTTP API -> Payment Switch -> DICT Resolver
@@ -65,6 +65,8 @@ The switch owns payment-rail state only. Settlement, ledger entries, balances, r
 - `OutboxRecord`: durable event envelope for downstream consumers
 - `AuditRecord`: immutable operational evidence for decisions and callbacks
 
+Detailed domain evidence lives in [docs/domain](docs/domain), and the senior case-study narrative lives in [docs/engineering-case-study.md](docs/engineering-case-study.md).
+
 ## API documentation
 
 The HTTP contract is versioned under `/v1` and documented in [openapi.yaml](openapi.yaml). Examples live in [docs/api/request-response-examples.md](docs/api/request-response-examples.md), and the shared error envelope is documented in [docs/api/error-format.md](docs/api/error-format.md).
@@ -75,11 +77,11 @@ Authentication accepts either `Authorization: Bearer <api-key>` or `X-API-Key: <
 
 Every accepted transfer writes events to an outbox in the same logical transaction as the transfer state. Events use the envelope documented in [docs/events/README.md](docs/events/README.md) and include `event_id`, `event_type`, `schema_version`, `occurred_at`, `producer`, `tenant_id`, `account_id`, `pix_transfer_id`, and `correlation_id`.
 
-The messaging topology defines a payment rail exchange, routing key, consumer queue, retry queue, dead-letter exchange, dead-letter queue, idempotency header, and correlation header in code and documentation. Consumers must deduplicate by `event_id` and preserve account-level ordering.
+The messaging topology defines a payment rail exchange, routing key, consumer queue, retry queue, dead-letter exchange, dead-letter queue, idempotency header, and correlation header in code and documentation. The relay drains pending outbox records, publishes them through a publisher interface, marks acknowledgements, and schedules failed publishes for retry. Consumers must deduplicate by `event_id` and preserve account-level ordering.
 
 ## Database design
 
-The local default uses an in-memory repository so tests and simple demos have no external dependency. Production mode requires `PIXRAIL_STORE_DRIVER=postgres` and `PIXRAIL_DATABASE_URL`. The PostgreSQL migration lives in [db/migrations/0001_pixrail_core.sql](db/migrations/0001_pixrail_core.sql), and the adapter is implemented under [internal/postgres](internal/postgres).
+The local default uses an in-memory repository so tests and simple demos have no external dependency. Production mode requires `PIXRAIL_STORE_DRIVER=postgres` and `PIXRAIL_DATABASE_URL`. The PostgreSQL migration lives in [db/migrations/0001_pixrail_core.sql](db/migrations/0001_pixrail_core.sql), the migration runner is [cmd/pixrail-migrate](cmd/pixrail-migrate), and the adapter is implemented under [internal/postgres](internal/postgres).
 
 Transaction boundary: transfer state, decision audit, and outbox inserts are committed together. Settlement callbacks are guarded by SPI message ID and terminal-state checks.
 
@@ -103,7 +105,7 @@ Benchmark methodology and local results are in [docs/benchmarks/methodology.md](
 PixRail exposes:
 
 - `GET /healthz`
-- `GET /readyz`
+- `GET /readyz`, backed by store health
 - `GET /metrics`
 - JSON request logs with request and correlation IDs
 - OpenTelemetry spans around HTTP routes
@@ -112,14 +114,16 @@ PixRail exposes:
 
 ## Security considerations
 
-Security coverage is documented in [docs/security/threat-model.md](docs/security/threat-model.md) and [docs/security/authorization-matrix.md](docs/security/authorization-matrix.md). The implementation covers API key authentication, tenant isolation, idempotency, rate limiting, input validation, audit logging, correlation IDs, and environment-based secret configuration.
+Security coverage is documented in [docs/security/threat-model.md](docs/security/threat-model.md), [docs/security/authorization-matrix.md](docs/security/authorization-matrix.md), [docs/security/abuse-cases.md](docs/security/abuse-cases.md), [docs/security/data-classification.md](docs/security/data-classification.md), and [docs/security/secrets.md](docs/security/secrets.md). The implementation covers API key authentication, tenant isolation, idempotency, rate limiting, input validation, audit logging, correlation IDs, production config guards, and environment-based secret configuration.
 
 ## Trade-offs and decisions
 
 - PixRail is a payment rail, not the ledger; see [ADR 0001](docs/adr/0001-payment-rail-boundary-before-financial-core.md).
 - A modular monolith is used before microservices because the hot path needs clear local transaction boundaries first.
-- In-memory adapters are accepted for the runnable MVP; PostgreSQL, Redis, and broker adapters are the next production-hardening slice.
+- In-memory adapters are accepted for local development; PostgreSQL is the durable store path, while Redis and broker adapters are the next production-hardening slice.
 - Full Event Sourcing, Kubernetes, service mesh, CDC, and data-lake analytics are deferred until provider integrations and persistence are real.
+
+Spec-driven readiness evidence is maintained in [docs/spec-driven](docs/spec-driven). Scalability and operational-cost analysis live in [docs/scalability.md](docs/scalability.md) and [docs/operational-cost.md](docs/operational-cost.md).
 
 ## How to run locally
 
@@ -142,6 +146,15 @@ Compose is available for production-like process wiring:
 
 ```sh
 docker compose up --build
+```
+
+To run against PostgreSQL, apply [db/migrations/0001_pixrail_core.sql](db/migrations/0001_pixrail_core.sql) and start with:
+
+```sh
+PIXRAIL_STORE_DRIVER=postgres \
+PIXRAIL_DATABASE_URL=postgres://pixrail:pixrail@localhost:5432/pixrail \
+PIXRAIL_API_KEYS=tenant_demo:dev-secret \
+go run ./cmd/pixrail-api
 ```
 
 The Compose path starts PostgreSQL, applies the migration with `pixrail-migrate`, then boots the API with `PIXRAIL_STORE_DRIVER=postgres`.
@@ -182,9 +195,9 @@ PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:5432/pixrail?ssl
 
 ## Roadmap
 
-- add PostgreSQL persistence and migrations
+- add PostgreSQL integration tests with a disposable database
 - add Redis-backed distributed rate limiting
-- add broker relay for outbox delivery
+- add broker-backed publisher for the existing outbox relay
 - add provider adapters for real DICT, antifraud, and SPI integrations
 - add signed internal callbacks and processed-message inbox
 - add ClickHouse projection for risk and payment analytics
