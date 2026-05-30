@@ -42,3 +42,23 @@ func TestLoadProvidesDevelopmentKey(t *testing.T) {
 		t.Fatalf("expected development API key, got %+v", cfg.APIKeys)
 	}
 }
+
+func TestLoadRejectsProductionMemoryStore(t *testing.T) {
+	t.Setenv("PIXRAIL_ENV", "production")
+	t.Setenv("PIXRAIL_API_KEYS", "tenant_a:secret-a")
+	t.Setenv("PIXRAIL_STORE_DRIVER", "memory")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected production to require postgres store")
+	}
+}
+
+func TestLoadRequiresDatabaseURLForPostgres(t *testing.T) {
+	t.Setenv("PIXRAIL_ENV", "development")
+	t.Setenv("PIXRAIL_STORE_DRIVER", "postgres")
+	t.Setenv("PIXRAIL_DATABASE_URL", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected postgres store to require database URL")
+	}
+}

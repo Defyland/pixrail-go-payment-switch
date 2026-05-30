@@ -17,6 +17,8 @@ type Config struct {
 	Addr                     string
 	Environment              string
 	APIKeys                  map[string]APIKey
+	StoreDriver              string
+	DatabaseURL              string
 	TenantBucketSize         int
 	DictBucketSize           int
 	DictTimeout              time.Duration
@@ -29,6 +31,8 @@ func Load() (Config, error) {
 	cfg := Config{
 		Addr:                     getenv("PIXRAIL_HTTP_ADDR", ":8080"),
 		Environment:              env,
+		StoreDriver:              getenv("PIXRAIL_STORE_DRIVER", "memory"),
+		DatabaseURL:              getenv("PIXRAIL_DATABASE_URL", ""),
 		TenantBucketSize:         getenvInt("PIXRAIL_TENANT_BUCKET_SIZE", 120),
 		DictBucketSize:           getenvInt("PIXRAIL_DICT_BUCKET_SIZE", 60),
 		DictTimeout:              getenvDuration("PIXRAIL_DICT_TIMEOUT", 300*time.Millisecond),
@@ -45,6 +49,15 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("PIXRAIL_API_KEYS is required in production")
 		}
 		keys["dev-secret"] = APIKey{TenantID: "tenant_demo", Secret: "dev-secret"}
+	}
+	if cfg.StoreDriver != "memory" && cfg.StoreDriver != "postgres" {
+		return Config{}, fmt.Errorf("PIXRAIL_STORE_DRIVER must be memory or postgres")
+	}
+	if cfg.StoreDriver == "postgres" && cfg.DatabaseURL == "" {
+		return Config{}, fmt.Errorf("PIXRAIL_DATABASE_URL is required when PIXRAIL_STORE_DRIVER=postgres")
+	}
+	if env == "production" && cfg.StoreDriver != "postgres" {
+		return Config{}, fmt.Errorf("PIXRAIL_STORE_DRIVER=postgres is required in production")
 	}
 	cfg.APIKeys = keys
 	return cfg, nil

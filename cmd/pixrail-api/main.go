@@ -14,9 +14,10 @@ import (
 	"github.com/Defyland/pixrail-go-payment-switch/internal/dict"
 	"github.com/Defyland/pixrail-go-payment-switch/internal/fraud"
 	"github.com/Defyland/pixrail-go-payment-switch/internal/observability"
+	"github.com/Defyland/pixrail-go-payment-switch/internal/postgres"
 	"github.com/Defyland/pixrail-go-payment-switch/internal/ratelimit"
 	"github.com/Defyland/pixrail-go-payment-switch/internal/spi"
-	"github.com/Defyland/pixrail-go-payment-switch/internal/store"
+	memorystore "github.com/Defyland/pixrail-go-payment-switch/internal/store"
 	"github.com/Defyland/pixrail-go-payment-switch/internal/switcher"
 )
 
@@ -35,7 +36,12 @@ func main() {
 		_ = shutdownTracing(ctx)
 	}()
 
-	store := store.NewMemoryStore()
+	store, closeStore, err := buildStore(context.Background(), cfg)
+	if err != nil {
+		logger.Error("store_initialization_failed", "error", err)
+		os.Exit(1)
+	}
+	defer closeStore()
 	service := switcher.NewService(
 		store,
 		dict.StaticResolver{TimeoutSignal: cfg.DictTimeout},
@@ -70,4 +76,19 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("pixrail_api_stopped")
+}
+
+func buildStore(ctx context.Context, cfg config.Config) (switcher.Store, func(), error) {
+	switch cfg.StoreDriver {
+	case "memory":
+		return memorystore.NewMemoryStore(), func() {}, nil
+	case "postgres":
+		store, err := postgres.New(ctx, cfg.DatabaseURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		return store, store.Close, nil
+	default:
+		return nil, nil, nil
+	}
 }
