@@ -14,7 +14,7 @@ PixRail is a modular monolith with explicit ports for DICT, fraud, SPI, storage,
 
 ## 4. Key Trade-offs
 
-The project chooses local runnable adapters first and durable production design second. The accepted cost is that local memory mode is not production state. The benefit is a fast portfolio runtime with tests and honest docs about what must move to PostgreSQL, Redis, and a broker.
+The project keeps local memory mode for fast tests and demos, but production configuration now requires PostgreSQL. The accepted cost is maintaining two storage adapters. The benefit is a portfolio runtime that remains easy to run while showing a credible durable-state path.
 
 ## 5. Data Model
 
@@ -58,9 +58,9 @@ PixRail optimizes payment-rail confidence, not banking completeness. It says no 
 
 ## 15. What I Would Do Next
 
-1. Add PostgreSQL integration tests with Compose or Testcontainers.
-2. Add broker-backed outbox publisher.
-3. Add Redis-backed distributed rate limiting.
-4. Add signed SPI callback verification.
-5. Run k6 load/stress/spike against the durable adapter.
-6. Add provider adapter contracts for real DICT and SPI certification.
+1. Add broker-backed outbox publisher.
+2. Add Redis-backed distributed rate limiting.
+3. Add signed SPI callback verification.
+4. Run k6 load/stress/spike against the durable adapter.
+5. Add provider adapter contracts for real DICT and SPI certification.
+6. Add Testcontainers or Compose-backed PostgreSQL tests to CI when Docker is available.

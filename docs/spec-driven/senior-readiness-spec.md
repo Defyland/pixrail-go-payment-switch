@@ -65,7 +65,7 @@ The project must run Go tests, race tests, vet, OpenAPI validation, security sca
 | API contract is versioned and validated | `openapi.yaml`, `docs/api/request-response-examples.md`, Redocly lint | Done | Includes auth and failure examples. |
 | Data consistency boundaries are documented | `docs/architecture/database-design.md`, `db/migrations/0001_pixrail_core.sql` | Done | PostgreSQL schema is migration evidence; local runtime can still use memory. |
 | Readiness reflects dependency health | `internal/api/server.go`, `internal/api/server_test.go` | Done | Health remains liveness; readiness checks store health. |
-| Outbox relay has retry semantics | `internal/outbox/relay.go`, `internal/outbox/relay_test.go`, `internal/store/memory.go` | Done | Relay handles publish ack and retry evidence. |
+| Outbox relay has retry semantics | `internal/messaging/relay.go`, `internal/messaging/relay_test.go`, `internal/store/memory.go` | Done | Relay handles publish ack and retry evidence. |
 | Security model covers BOLA and secrets | `docs/security/threat-model.md`, `docs/security/authorization-matrix.md`, `docs/security/abuse-cases.md`, `docs/security/secrets.md` | Done | Tests cover tenant isolation and auth. |
 | Observability has domain metrics and runbooks | `internal/observability/metrics.go`, `observability/grafana/pixrail-overview-dashboard.json`, `docs/observability/overview.md`, `docs/runbooks/` | Done | Domain decision/outbox metrics are present. |
 | Performance evidence is measured | `benchmarks/results/2026-05-30-local-baseline.md`, `internal/api/server_test.go` | Done | p50/p95/p99 and benchmark output recorded. |

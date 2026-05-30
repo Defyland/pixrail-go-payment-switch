@@ -34,7 +34,7 @@ The outbox grows first when downstream broker publishing fails. Relay attempts, 
 
 ## Horizontal scaling
 
-The HTTP API is horizontally scalable when idempotency, transfer state, outbox, and rate limiting move to shared PostgreSQL/Redis dependencies. In-memory mode is local/testing only.
+The HTTP API is horizontally scalable when idempotency, transfer state, and outbox use PostgreSQL, and rate limiting moves to Redis. In-memory mode is local/testing only.
 
 ## Sharding candidates
 

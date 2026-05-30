@@ -31,8 +31,8 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - `internal/api/server_test.go`
 - `internal/store/memory.go`
 - `internal/store/memory_test.go`
-- `internal/outbox/relay.go`
-- `internal/outbox/relay_test.go`
+- `internal/messaging/relay.go`
+- `internal/messaging/relay_test.go`
 - `internal/spec/repository_spec_test.go`
 
 ## Acceptance Criteria Mapping
@@ -71,7 +71,7 @@ docker build -t pixrail-api:local .
 
 ## Deferred Work
 
-- Real PostgreSQL integration tests using Testcontainers or Compose.
+- Always-on PostgreSQL integration tests using Testcontainers or Compose.
 - Broker-backed outbox publisher.
 - Redis-backed distributed rate limiter.
 - Real DICT/SPI provider adapters.
