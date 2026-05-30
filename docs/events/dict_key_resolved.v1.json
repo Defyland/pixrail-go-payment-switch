@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Defyland/pixrail-go-payment-switch/docs/events/dict_key_resolved.v1.json",
+  "title": "DictKeyResolved v1",
+  "type": "object",
+  "required": ["event_id", "event_type", "schema_version", "occurred_at", "producer", "tenant_id", "account_id", "pix_transfer_id", "correlation_id", "payload"],
+  "properties": {
+    "event_id": { "type": "string" },
+    "event_type": { "type": "string", "const": "dict_key_resolved" },
+    "schema_version": { "type": "string", "const": "1" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "producer": { "type": "string", "const": "pixrail.payment-switch" },
+    "tenant_id": { "type": "string" },
+    "account_id": { "type": "string" },
+    "pix_transfer_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
+    "payload": { "type": "object" }
+  },
+  "additionalProperties": false
+}
