@@ -12,6 +12,12 @@ Native benchmark command:
 go test -bench=. -benchmem ./internal/api
 ```
 
+Latency budget command:
+
+```sh
+go test -run TestCreateTransferLatencyBudget -v ./internal/api
+```
+
 Measured output:
 
 ```text
@@ -23,10 +29,19 @@ BenchmarkCreateTransfer-10        45585    28066 ns/op    27136 B/op    230 allo
 PASS
 ```
 
+Latency profile output:
+
+```text
+local profile iterations=250 p50=18.541us p95=35.666us p99=260.542us throughput=33744 rps error_rate=0.00%
+```
+
 | Metric | Result |
 | --- | ---: |
+| p50 latency | 18.541 microseconds |
+| p95 latency | 35.666 microseconds |
+| p99 latency | 260.542 microseconds |
 | mean in-process HTTP latency | 28.066 microseconds/op |
-| throughput estimate | about 35,630 ops/sec in benchmark process |
+| throughput | 33,744 rps in latency profile; about 35,630 ops/sec in benchmark process |
 | error rate | 0% for benchmarked happy path |
 | memory | 27,136 B/op |
 | allocations | 230 allocs/op |

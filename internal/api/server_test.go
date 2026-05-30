@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -171,6 +172,46 @@ func BenchmarkCreateTransfer(b *testing.B) {
 	}
 }
 
+func TestCreateTransferLatencyBudget(t *testing.T) {
+	iterations := 250
+	handler := newTestHandler(iterations + 10)
+	latencies := make([]time.Duration, 0, iterations)
+	errors := 0
+	started := time.Now()
+
+	for i := 0; i < iterations; i++ {
+		payload := fmt.Sprintf(`{"account_id":"acct_perf","amount_cents":12345,"currency":"BRL","receiver_key":"perf%d@example.com","receiver_key_type":"EMAIL"}`, i)
+		req := request(handler, http.MethodPost, "/v1/pix/transfers", payload, true)
+		req.Header.Set("Idempotency-Key", fmt.Sprintf("perf-%d", i))
+		resp := httptest.NewRecorder()
+		before := time.Now()
+		handler.ServeHTTP(resp, req)
+		latencies = append(latencies, time.Since(before))
+		if resp.Code != http.StatusCreated {
+			errors++
+		}
+	}
+
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	elapsed := time.Since(started)
+	p50 := latencyPercentile(latencies, 0.50)
+	p95 := latencyPercentile(latencies, 0.95)
+	p99 := latencyPercentile(latencies, 0.99)
+	throughput := float64(iterations) / elapsed.Seconds()
+	errorRate := float64(errors) / float64(iterations)
+	t.Logf("local profile iterations=%d p50=%s p95=%s p99=%s throughput=%.0f rps error_rate=%.2f%%", iterations, p50, p95, p99, throughput, errorRate*100)
+
+	if errorRate != 0 {
+		t.Fatalf("expected zero errors, got %.2f%%", errorRate*100)
+	}
+	if p95 > 20*time.Millisecond {
+		t.Fatalf("p95 latency budget exceeded: %s", p95)
+	}
+	if p99 > 50*time.Millisecond {
+		t.Fatalf("p99 latency budget exceeded: %s", p99)
+	}
+}
+
 func newTestHandler(capacity int) http.Handler {
 	return newTestHandlerWithKeys(capacity, map[string]config.APIKey{"test-secret": {TenantID: "tenant_a", Secret: "test-secret"}})
 }
@@ -211,4 +252,12 @@ func decodeBody(t *testing.T, raw []byte) map[string]any {
 		t.Fatalf("decode response: %v\n%s", err, raw)
 	}
 	return body
+}
+
+func latencyPercentile(samples []time.Duration, quantile float64) time.Duration {
+	if len(samples) == 0 {
+		return 0
+	}
+	index := int(float64(len(samples)-1) * quantile)
+	return samples[index]
 }
