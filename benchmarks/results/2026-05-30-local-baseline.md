@@ -25,7 +25,7 @@ goos: darwin
 goarch: arm64
 pkg: github.com/Defyland/pixrail-go-payment-switch/internal/api
 cpu: Apple M1 Max
-BenchmarkCreateTransfer-10        45585    28066 ns/op    27136 B/op    230 allocs/op
+BenchmarkCreateTransfer-10        40576    30457 ns/op    27849 B/op    230 allocs/op
 PASS
 ```
 
@@ -40,10 +40,10 @@ local profile iterations=250 p50=18.541us p95=35.666us p99=260.542us throughput=
 | p50 latency | 18.541 microseconds |
 | p95 latency | 35.666 microseconds |
 | p99 latency | 260.542 microseconds |
-| mean in-process HTTP latency | 28.066 microseconds/op |
-| throughput | 33,744 rps in latency profile; about 35,630 ops/sec in benchmark process |
+| mean in-process HTTP latency | 30.457 microseconds/op |
+| throughput | 33,744 rps in latency profile; about 32,833 ops/sec in benchmark process |
 | error rate | 0% for benchmarked happy path |
-| memory | 27,136 B/op |
+| memory | 27,849 B/op |
 | allocations | 230 allocs/op |
 | CPU/memory notes | no external IO; allocations mostly JSON and response maps |
 
