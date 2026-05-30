@@ -19,17 +19,17 @@ goos: darwin
 goarch: arm64
 pkg: github.com/Defyland/pixrail-go-payment-switch/internal/api
 cpu: Apple M1 Max
-BenchmarkCreateTransfer-10        48748    24339 ns/op    28111 B/op    229 allocs/op
+BenchmarkCreateTransfer-10        45585    28066 ns/op    27136 B/op    230 allocs/op
 PASS
 ```
 
 | Metric | Result |
 | --- | ---: |
-| mean in-process HTTP latency | 24.339 microseconds/op |
-| throughput estimate | about 41,086 ops/sec in benchmark process |
+| mean in-process HTTP latency | 28.066 microseconds/op |
+| throughput estimate | about 35,630 ops/sec in benchmark process |
 | error rate | 0% for benchmarked happy path |
-| memory | 28,111 B/op |
-| allocations | 229 allocs/op |
+| memory | 27,136 B/op |
+| allocations | 230 allocs/op |
 | CPU/memory notes | no external IO; allocations mostly JSON and response maps |
 
 k6 smoke, load, stress, and spike scripts are included but should be run against a long-lived local server or Compose environment before using them as release SLO evidence.
