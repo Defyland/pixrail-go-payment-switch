@@ -152,6 +152,7 @@ To run against PostgreSQL, apply [db/migrations/0001_pixrail_core.sql](db/migrat
 
 ```sh
 PIXRAIL_STORE_DRIVER=postgres \
+PIXRAIL_HTTP_ADDR=:18080 \
 PIXRAIL_DATABASE_URL=postgres://pixrail:pixrail@localhost:55432/pixrail?sslmode=disable \
 PIXRAIL_API_KEYS=tenant_demo:dev-secret \
 go run ./cmd/pixrail-api
