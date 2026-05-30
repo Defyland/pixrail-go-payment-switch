@@ -48,15 +48,18 @@ func (s *MemoryStore) Health(ctx context.Context) error {
 	}
 }
 
-func (s *MemoryStore) FindByIdempotency(_ context.Context, tenantID, key string) (rail.Transfer, bool) {
+func (s *MemoryStore) FindByIdempotency(ctx context.Context, tenantID, key string) (rail.Transfer, bool, error) {
+	if err := s.Health(ctx); err != nil {
+		return rail.Transfer{}, false, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	id, ok := s.idempotency[tenantID+":"+key]
 	if !ok {
-		return rail.Transfer{}, false
+		return rail.Transfer{}, false, nil
 	}
 	transfer, ok := s.transfers[id]
-	return transfer, ok
+	return transfer, ok, nil
 }
 
 func (s *MemoryStore) InsertTransfer(_ context.Context, transfer rail.Transfer, outbox []events.Event, audit []AuditRecord) error {

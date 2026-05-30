@@ -18,7 +18,7 @@ func TestMemoryStoreEnforcesIdempotencyPerTenant(t *testing.T) {
 		t.Fatalf("insert failed: %v", err)
 	}
 
-	if replay, ok := store.FindByIdempotency(ctx, "tenant_a", "idem"); !ok || replay.ID != transfer.ID {
+	if replay, ok, err := store.FindByIdempotency(ctx, "tenant_a", "idem"); err != nil || !ok || replay.ID != transfer.ID {
 		t.Fatalf("expected idempotent replay, got ok=%v transfer=%+v", ok, replay)
 	}
 

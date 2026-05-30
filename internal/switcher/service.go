@@ -20,7 +20,7 @@ import (
 
 type Store interface {
 	Health(ctx context.Context) error
-	FindByIdempotency(ctx context.Context, tenantID, key string) (rail.Transfer, bool)
+	FindByIdempotency(ctx context.Context, tenantID, key string) (rail.Transfer, bool, error)
 	InsertTransfer(ctx context.Context, transfer rail.Transfer, outbox []events.Event, audit []store.AuditRecord) error
 	GetTransfer(ctx context.Context, tenantID, transferID string) (rail.Transfer, error)
 	UpdateSettlement(ctx context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, error)
@@ -72,7 +72,9 @@ func (s *Service) CreateTransfer(ctx context.Context, req rail.CreateTransferReq
 		return Result{}, err
 	}
 
-	if transfer, ok := s.store.FindByIdempotency(ctx, req.TenantID, req.IdempotencyKey); ok {
+	if transfer, ok, err := s.store.FindByIdempotency(ctx, req.TenantID, req.IdempotencyKey); err != nil {
+		return Result{}, err
+	} else if ok {
 		return Result{Transfer: transfer, IdempotentReplay: true}, nil
 	}
 	if s.tenantLimit != nil && !s.tenantLimit.Allow(req.TenantID+":"+req.AccountID) {
