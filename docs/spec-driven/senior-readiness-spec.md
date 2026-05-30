@@ -52,7 +52,7 @@ Code, tests, and docs must use PixRail domain language instead of generic proces
 
 ## Test and CI Bar
 
-The project must run Go tests, race tests, vet, OpenAPI validation, security scan, coverage, Docker build in CI, and performance checks. Local Docker build may remain environment-dependent if Docker daemon is unavailable, but CI must cover it.
+The project must run Go tests, race tests, vet, OpenAPI validation, security scan, coverage, Docker build, Compose smoke, PostgreSQL integration, and performance checks. CI covers the repeatable quality gates, while local Compose evidence proves the durable runtime path.
 
 ## Evidence Matrix
 
@@ -68,10 +68,10 @@ The project must run Go tests, race tests, vet, OpenAPI validation, security sca
 | Outbox relay has retry semantics | `internal/messaging/relay.go`, `internal/messaging/relay_test.go`, `internal/store/memory.go` | Done | Relay handles publish ack and retry evidence. |
 | Security model covers BOLA and secrets | `docs/security/threat-model.md`, `docs/security/authorization-matrix.md`, `docs/security/abuse-cases.md`, `docs/security/secrets.md` | Done | Tests cover tenant isolation and auth. |
 | Observability has domain metrics and runbooks | `internal/observability/metrics.go`, `observability/grafana/pixrail-overview-dashboard.json`, `docs/observability/overview.md`, `docs/runbooks/` | Done | Domain decision/outbox metrics are present. |
-| Performance evidence is measured | `benchmarks/results/2026-05-30-local-baseline.md`, `internal/api/server_test.go` | Done | p50/p95/p99 and benchmark output recorded. |
+| Performance evidence is measured | `benchmarks/results/2026-05-30-local-baseline.md`, `internal/api/server_test.go`, `benchmarks/k6/` | Done | Native p50/p95/p99 plus k6 smoke/load/stress/spike output recorded. |
 | Scalability and cost are explicit | `docs/scalability.md`, `docs/operational-cost.md` | Done | Names bottlenecks and accepted cost. |
 | CI covers quality gates | `.github/workflows/ci.yml` | Done | Includes format, tests, security, OpenAPI, Docker. |
-| Docker build validated locally | local Docker daemon | Partial | Docker daemon unavailable locally; workflow contains Docker build validation. |
+| Docker and Compose validated locally | `Dockerfile`, `compose.yaml`, `docker-compose.yml`, `docs/spec-driven/verification-report.md` | Done | Local Docker build, PostgreSQL Compose, migration runner, API, Prometheus, smoke, and k6 all passed. |
 | Real provider certification | external Pix/DICT/SPI providers | Planned | Out of scope for portfolio MVP. |
 
 ## Out of Scope

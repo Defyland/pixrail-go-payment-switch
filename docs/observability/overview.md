@@ -6,6 +6,8 @@ PixRail emits three operational signal types:
 - Prometheus text metrics at `/metrics`
 - OpenTelemetry HTTP route spans with trace-context propagation
 
+Trace exporting is controlled with `PIXRAIL_TRACING_EXPORTER`. Use `stdout` for local debugging and `none` when an external collector is not configured, including Compose benchmarks where per-request span logs would dominate the signal.
+
 ## Core metrics
 
 - `pixrail_http_requests_total`

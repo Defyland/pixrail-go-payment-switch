@@ -24,6 +24,7 @@ type Config struct {
 	DictTimeout              time.Duration
 	ShutdownTimeout          time.Duration
 	RequireConfiguredSecrets bool
+	TracingExporter          string
 }
 
 func Load() (Config, error) {
@@ -38,6 +39,7 @@ func Load() (Config, error) {
 		DictTimeout:              getenvDuration("PIXRAIL_DICT_TIMEOUT", 300*time.Millisecond),
 		ShutdownTimeout:          getenvDuration("PIXRAIL_SHUTDOWN_TIMEOUT", 5*time.Second),
 		RequireConfiguredSecrets: env == "production",
+		TracingExporter:          getenv("PIXRAIL_TRACING_EXPORTER", defaultTracingExporter(env)),
 	}
 
 	keys, err := parseAPIKeys(os.Getenv("PIXRAIL_API_KEYS"))
@@ -59,8 +61,18 @@ func Load() (Config, error) {
 	if env == "production" && cfg.StoreDriver != "postgres" {
 		return Config{}, fmt.Errorf("PIXRAIL_STORE_DRIVER=postgres is required in production")
 	}
+	if cfg.TracingExporter != "none" && cfg.TracingExporter != "stdout" {
+		return Config{}, fmt.Errorf("PIXRAIL_TRACING_EXPORTER must be none or stdout")
+	}
 	cfg.APIKeys = keys
 	return cfg, nil
+}
+
+func defaultTracingExporter(env string) string {
+	if env == "production" {
+		return "none"
+	}
+	return "stdout"
 }
 
 func parseAPIKeys(raw string) (map[string]APIKey, error) {

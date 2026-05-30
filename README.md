@@ -108,7 +108,7 @@ PixRail exposes:
 - `GET /readyz`, backed by store health
 - `GET /metrics`
 - JSON request logs with request and correlation IDs
-- OpenTelemetry spans around HTTP routes
+- OpenTelemetry spans around HTTP routes; stdout exporting is controlled by `PIXRAIL_TRACING_EXPORTER`
 - Prometheus counters and latency quantiles
 - Grafana dashboard definition in [observability/grafana/pixrail-overview-dashboard.json](observability/grafana/pixrail-overview-dashboard.json)
 
@@ -145,7 +145,7 @@ curl -s -X POST http://localhost:8080/v1/pix/transfers \
 Compose is available for production-like process wiring:
 
 ```sh
-docker compose up --build
+docker compose -f compose.yaml up --build
 ```
 
 To run against PostgreSQL, apply [db/migrations/0001_pixrail_core.sql](db/migrations/0001_pixrail_core.sql) and start with:
@@ -153,7 +153,7 @@ To run against PostgreSQL, apply [db/migrations/0001_pixrail_core.sql](db/migrat
 ```sh
 PIXRAIL_STORE_DRIVER=postgres \
 PIXRAIL_HTTP_ADDR=:18080 \
-PIXRAIL_DATABASE_URL=postgres://pixrail:pixrail@localhost:55432/pixrail?sslmode=disable \
+PIXRAIL_DATABASE_URL=postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable \
 PIXRAIL_API_KEYS=tenant_demo:dev-secret \
 go run ./cmd/pixrail-api
 ```
@@ -163,7 +163,7 @@ The Compose path starts PostgreSQL, applies the migration with `pixrail-migrate`
 To apply the migration manually:
 
 ```sh
-PIXRAIL_DATABASE_URL='postgres://pixrail:pixrail@localhost:55432/pixrail?sslmode=disable' \
+PIXRAIL_DATABASE_URL='postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable' \
   go run ./cmd/pixrail-migrate
 ```
 
@@ -179,7 +179,7 @@ go vet ./...
 Optional PostgreSQL integration test:
 
 ```sh
-PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:55432/pixrail?sslmode=disable' \
+PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable' \
   go test ./internal/postgres -run Integration
 ```
 

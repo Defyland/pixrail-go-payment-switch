@@ -1,2 +1,5 @@
+# Compatibility entrypoint for the senior evidence package. Operational docs use
+# `docker compose -f compose.yaml` so Docker Compose does not warn about multiple
+# default config names.
 include:
   - compose.yaml

@@ -18,4 +18,4 @@
 
 ## Production guardrails
 
-`PIXRAIL_ENV=production` requires configured API keys and PostgreSQL storage. Memory mode is rejected because payment decisions must survive process restarts.
+`PIXRAIL_ENV=production` requires configured API keys and PostgreSQL storage. Memory mode is rejected because payment decisions must survive process restarts. Trace exporting defaults to `none` in production unless `PIXRAIL_TRACING_EXPORTER=stdout` is explicitly selected for local diagnostics.

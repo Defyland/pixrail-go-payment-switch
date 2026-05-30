@@ -29,7 +29,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	shutdownTracing := observability.ConfigureTracing("pixrail-api", os.Stdout)
+	shutdownTracing := observability.ConfigureTracing("pixrail-api", cfg.TracingExporter, os.Stdout)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()

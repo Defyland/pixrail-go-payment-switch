@@ -2,6 +2,8 @@ import http from "k6/http";
 import { check } from "k6";
 import { BASE_URL, headers, transferPayload } from "./common.js";
 
+http.setResponseCallback(http.expectedStatuses({ min: 200, max: 201 }, 429));
+
 export const options = {
   stages: [
     { duration: "10s", target: 5 },

@@ -62,3 +62,38 @@ func TestLoadRequiresDatabaseURLForPostgres(t *testing.T) {
 		t.Fatal("expected postgres store to require database URL")
 	}
 }
+
+func TestLoadTracingExporterDefaults(t *testing.T) {
+	t.Setenv("PIXRAIL_ENV", "development")
+	t.Setenv("PIXRAIL_API_KEYS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if cfg.TracingExporter != "stdout" {
+		t.Fatalf("expected development tracing stdout, got %q", cfg.TracingExporter)
+	}
+
+	t.Setenv("PIXRAIL_ENV", "production")
+	t.Setenv("PIXRAIL_API_KEYS", "tenant_a:secret-a")
+	t.Setenv("PIXRAIL_STORE_DRIVER", "postgres")
+	t.Setenv("PIXRAIL_DATABASE_URL", "postgres://example")
+	t.Setenv("PIXRAIL_TRACING_EXPORTER", "")
+
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if cfg.TracingExporter != "none" {
+		t.Fatalf("expected production tracing none, got %q", cfg.TracingExporter)
+	}
+}
+
+func TestLoadRejectsUnknownTracingExporter(t *testing.T) {
+	t.Setenv("PIXRAIL_TRACING_EXPORTER", "debug")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected unknown tracing exporter to fail")
+	}
+}
