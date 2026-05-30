@@ -66,3 +66,41 @@ curl -s -X POST http://localhost:8080/v1/pix/transfers/pxt_123/spi-callbacks \
 ```
 
 Accepted callbacks move an approved transfer to `settled`. Repeated callbacks for a terminal transfer replay the terminal state.
+
+## Authorization failure
+
+```sh
+curl -s -X POST http://localhost:8080/v1/pix/transfers \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+```json
+{
+  "error": {
+    "code": "unauthorized",
+    "message": "valid API key is required",
+    "details": null
+  }
+}
+```
+
+## Validation failure
+
+```sh
+curl -s -X POST http://localhost:8080/v1/pix/transfers \
+  -H 'Authorization: Bearer dev-secret' \
+  -H 'Idempotency-Key: invalid-1' \
+  -H 'Content-Type: application/json' \
+  -d '{"amount_cents":0,"currency":"USD","receiver_key_type":"EMAIL"}'
+```
+
+```json
+{
+  "error": {
+    "code": "validation_failed",
+    "message": "validation failed: account_id is required; amount_cents must be greater than zero; currency must be BRL; receiver_key is required",
+    "details": null
+  }
+}
+```
