@@ -27,7 +27,11 @@ func TestCreateTransferApprovesAndPublishesOutbox(t *testing.T) {
 	if result.Transfer.SPIMessageID == "" || result.Transfer.EndToEndID == "" {
 		t.Fatalf("expected SPI identifiers: %+v", result.Transfer)
 	}
-	if len(service.Outbox(context.Background())) < 5 {
+	outbox, err := service.Outbox(context.Background())
+	if err != nil {
+		t.Fatalf("outbox failed: %v", err)
+	}
+	if len(outbox) < 5 {
 		t.Fatalf("expected requested, dict, fraud, spi, approved events")
 	}
 }
@@ -50,7 +54,11 @@ func TestCreateTransferIsIdempotent(t *testing.T) {
 	if second.Transfer.ID != first.Transfer.ID {
 		t.Fatalf("expected same transfer, got %s and %s", first.Transfer.ID, second.Transfer.ID)
 	}
-	if got := len(service.Outbox(context.Background())); got != len(first.Events) {
+	outbox, err := service.Outbox(context.Background())
+	if err != nil {
+		t.Fatalf("outbox failed: %v", err)
+	}
+	if got := len(outbox); got != len(first.Events) {
 		t.Fatalf("idempotent replay should not append events, got %d", got)
 	}
 }

@@ -132,22 +132,26 @@ func (s *Store) UpdateSettlement(ctx context.Context, tenantID string, transferI
 	return transfer, tx.Commit(ctx)
 }
 
-func (s *Store) Outbox(ctx context.Context) []events.OutboxRecord {
+func (s *Store) Outbox(ctx context.Context) ([]events.OutboxRecord, error) {
 	rows, err := s.pool.Query(ctx, outboxSelectSQL()+` order by sequence asc`)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
-	return scanOutboxRows(rows)
+	records, err := scanOutboxRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return records, rows.Err()
 }
 
-func (s *Store) Audit(ctx context.Context) []store.AuditRecord {
+func (s *Store) Audit(ctx context.Context) ([]store.AuditRecord, error) {
 	rows, err := s.pool.Query(ctx, `
 		select tenant_id, account_id, pix_transfer_id, action, correlation_id, metadata, created_at
 		  from audit_records
 		 order by id asc`)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -156,12 +160,14 @@ func (s *Store) Audit(ctx context.Context) []store.AuditRecord {
 		var record store.AuditRecord
 		var metadata []byte
 		if err := rows.Scan(&record.TenantID, &record.AccountID, &record.TransferID, &record.Action, &record.CorrelationID, &metadata, &record.CreatedAt); err != nil {
-			return nil
+			return nil, err
 		}
-		_ = json.Unmarshal(metadata, &record.Metadata)
+		if err := json.Unmarshal(metadata, &record.Metadata); err != nil {
+			return nil, err
+		}
 		records = append(records, record)
 	}
-	return records
+	return records, rows.Err()
 }
 
 func (s *Store) PendingOutbox(ctx context.Context, limit int) ([]events.OutboxRecord, error) {
@@ -176,7 +182,11 @@ func (s *Store) PendingOutbox(ctx context.Context, limit int) ([]events.OutboxRe
 		return nil, err
 	}
 	defer rows.Close()
-	return scanOutboxRows(rows), rows.Err()
+	records, err := scanOutboxRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return records, rows.Err()
 }
 
 func (s *Store) MarkOutboxPublished(ctx context.Context, sequence int64, dispatchedAt time.Time) error {
@@ -313,7 +323,7 @@ func outboxSelectSQL() string {
 		  from payment_outbox`
 }
 
-func scanOutboxRows(rows pgx.Rows) []events.OutboxRecord {
+func scanOutboxRows(rows pgx.Rows) ([]events.OutboxRecord, error) {
 	var records []events.OutboxRecord
 	for rows.Next() {
 		var record events.OutboxRecord
@@ -336,11 +346,11 @@ func scanOutboxRows(rows pgx.Rows) []events.OutboxRecord {
 			&record.DispatchedAt,
 		)
 		if err != nil {
-			return nil
+			return nil, err
 		}
 		records = append(records, record)
 	}
-	return records
+	return records, nil
 }
 
 func rollback(ctx context.Context, tx pgx.Tx) {

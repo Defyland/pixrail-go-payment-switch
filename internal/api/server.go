@@ -174,7 +174,11 @@ func (s *Server) recordSettlement(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) outbox(w http.ResponseWriter, r *http.Request) {
 	tenantID := tenantFromContext(r.Context())
-	records := s.service.Outbox(r.Context())
+	records, err := s.service.Outbox(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "outbox_read_failed", err.Error(), nil)
+		return
+	}
 	filtered := make([]events.OutboxRecord, 0, len(records))
 	for _, record := range records {
 		if record.Event.TenantID == tenantID {

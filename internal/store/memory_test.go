@@ -107,14 +107,21 @@ func TestMemoryStoreOutboxRelayState(t *testing.T) {
 		t.Fatalf("failed event should wait for retry, got %d pending", len(pending))
 	}
 
-	records := store.Outbox(ctx)
+	records, err := store.Outbox(ctx)
+	if err != nil {
+		t.Fatalf("outbox failed: %v", err)
+	}
 	if records[0].Attempts != 1 || records[0].LastError != "broker unavailable" {
 		t.Fatalf("expected failure evidence, got %+v", records[0])
 	}
 	if err := store.MarkOutboxPublished(ctx, records[0].Sequence, time.Now().UTC()); err != nil {
 		t.Fatalf("mark published: %v", err)
 	}
-	if records := store.Outbox(ctx); !records[0].Published || records[0].DispatchedAt == nil || records[0].LastError != "" {
+	records, err = store.Outbox(ctx)
+	if err != nil {
+		t.Fatalf("outbox failed: %v", err)
+	}
+	if !records[0].Published || records[0].DispatchedAt == nil || records[0].LastError != "" {
 		t.Fatalf("expected published event, got %+v", records[0])
 	}
 }

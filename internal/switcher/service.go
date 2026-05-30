@@ -24,8 +24,8 @@ type Store interface {
 	InsertTransfer(ctx context.Context, transfer rail.Transfer, outbox []events.Event, audit []store.AuditRecord) error
 	GetTransfer(ctx context.Context, tenantID, transferID string) (rail.Transfer, error)
 	UpdateSettlement(ctx context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, error)
-	Outbox(ctx context.Context) []events.OutboxRecord
-	Audit(ctx context.Context) []store.AuditRecord
+	Outbox(ctx context.Context) ([]events.OutboxRecord, error)
+	Audit(ctx context.Context) ([]store.AuditRecord, error)
 }
 
 type Service struct {
@@ -244,11 +244,11 @@ func (s *Service) RecordSettlement(ctx context.Context, callback rail.Settlement
 	return Result{Transfer: updated, Events: []events.Event{event}}, nil
 }
 
-func (s *Service) Outbox(ctx context.Context) []events.OutboxRecord {
+func (s *Service) Outbox(ctx context.Context) ([]events.OutboxRecord, error) {
 	return s.store.Outbox(ctx)
 }
 
-func (s *Service) Audit(ctx context.Context) []store.AuditRecord {
+func (s *Service) Audit(ctx context.Context) ([]store.AuditRecord, error) {
 	return s.store.Audit(ctx)
 }
 

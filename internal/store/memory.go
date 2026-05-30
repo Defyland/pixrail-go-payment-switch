@@ -118,12 +118,15 @@ func (s *MemoryStore) UpdateSettlement(_ context.Context, tenantID string, trans
 	return transfer, nil
 }
 
-func (s *MemoryStore) Outbox(_ context.Context) []events.OutboxRecord {
+func (s *MemoryStore) Outbox(ctx context.Context) ([]events.OutboxRecord, error) {
+	if err := s.Health(ctx); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	records := make([]events.OutboxRecord, len(s.events))
 	copy(records, s.events)
-	return records
+	return records, nil
 }
 
 func (s *MemoryStore) PendingOutbox(ctx context.Context, limit int) ([]events.OutboxRecord, error) {
@@ -190,12 +193,15 @@ func (s *MemoryStore) MarkOutboxFailed(ctx context.Context, sequence int64, last
 	return fmt.Errorf("%w: outbox sequence not found", rail.ErrNotFound)
 }
 
-func (s *MemoryStore) Audit(_ context.Context) []AuditRecord {
+func (s *MemoryStore) Audit(ctx context.Context) ([]AuditRecord, error) {
+	if err := s.Health(ctx); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	records := make([]AuditRecord, len(s.audit))
 	copy(records, s.audit)
-	return records
+	return records, nil
 }
 
 func (s *MemoryStore) appendEventsLocked(outbox []events.Event) {

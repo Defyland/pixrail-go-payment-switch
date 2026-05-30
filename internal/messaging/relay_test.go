@@ -27,7 +27,11 @@ func TestRelayPublishesAndMarksOutboxRecords(t *testing.T) {
 	if len(publisher.Events) != 1 || publisher.Events[0].CorrelationID != "corr_1" {
 		t.Fatalf("expected correlation-preserving publish, got %+v", publisher.Events)
 	}
-	if records := store.Outbox(ctx); !records[0].Published || records[0].DispatchedAt == nil {
+	records, err := store.Outbox(ctx)
+	if err != nil {
+		t.Fatalf("outbox failed: %v", err)
+	}
+	if !records[0].Published || records[0].DispatchedAt == nil {
 		t.Fatalf("expected published outbox record, got %+v", records[0])
 	}
 }
@@ -45,7 +49,11 @@ func TestRelaySchedulesRetryWhenPublishFails(t *testing.T) {
 	if stats.Scanned != 1 || stats.Published != 0 || stats.Retried != 1 {
 		t.Fatalf("unexpected stats: %+v", stats)
 	}
-	record := store.Outbox(ctx)[0]
+	records, err := store.Outbox(ctx)
+	if err != nil {
+		t.Fatalf("outbox failed: %v", err)
+	}
+	record := records[0]
 	if record.Published || record.Attempts != 1 || record.LastError != "broker down" {
 		t.Fatalf("expected retry evidence, got %+v", record)
 	}
