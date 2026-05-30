@@ -15,9 +15,10 @@ The repository now has the required spec-driven documents, product and domain ev
 | `go vet ./...` | Passed | No vet findings. |
 | `npx --yes @redocly/cli lint openapi.yaml` | Passed | OpenAPI validated in 18 ms with no warnings. |
 | `go run golang.org/x/vuln/cmd/govulncheck@latest ./...` | Passed | `No vulnerabilities found.` |
-| `go test -bench=. -benchmem ./internal/api` | Passed | `BenchmarkCreateTransfer-10 44866 29650 ns/op 27248 B/op 230 allocs/op`. |
+| `go test -bench=. -benchmem ./internal/api` | Passed | `BenchmarkCreateTransfer-10 46824 24465 ns/op 28464 B/op 230 allocs/op`. |
 | `go test -run TestCreateTransferLatencyBudget -v ./internal/api` | Passed | p50 `19.416us`, p95 `75.834us`, p99 `325.583us`, throughput `28561 rps`, error rate `0.00%`. |
 | `go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out` | Passed | Total statement coverage `58.2%`; core packages have focused coverage, PostgreSQL adapter lacks live DB integration coverage. |
+| `go run ./cmd/pixrail-api` plus HTTP smoke | Passed | `/readyz` returned store-backed ready, `POST /v1/pix/transfers` returned `201`, and authenticated `/v1/outbox` returned five payment-rail events. |
 | `docker build -t pixrail-api:local .` | Blocked locally | Docker daemon unavailable: `Cannot connect to the Docker daemon at unix:///Users/allanflavio/.docker/run/docker.sock`. CI still includes Docker build validation. |
 
 ## Passing Criteria
