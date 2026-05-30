@@ -51,6 +51,7 @@ The switch owns payment-rail state only. Settlement, ledger entries, balances, r
 - OpenTelemetry API and SDK
 - structured logs through `log/slog`
 - Prometheus text metrics
+- PostgreSQL adapter and migration runner
 - Docker and Compose
 - k6 benchmark scripts
 - GitHub Actions CI
@@ -78,7 +79,7 @@ The messaging topology defines a payment rail exchange, routing key, consumer qu
 
 ## Database design
 
-The runnable MVP uses an in-memory repository so tests and demos have no external dependency. The production design is documented in [docs/architecture/database-design.md](docs/architecture/database-design.md): PostgreSQL tables for transfers, outbox records, audit records, and processed callbacks, with unique constraints on tenant/idempotency key, SPI message ID, and event ID.
+The local default uses an in-memory repository so tests and simple demos have no external dependency. Production mode requires `PIXRAIL_STORE_DRIVER=postgres` and `PIXRAIL_DATABASE_URL`. The PostgreSQL migration lives in [db/migrations/0001_pixrail_core.sql](db/migrations/0001_pixrail_core.sql), and the adapter is implemented under [internal/postgres](internal/postgres).
 
 Transaction boundary: transfer state, decision audit, and outbox inserts are committed together. Settlement callbacks are guarded by SPI message ID and terminal-state checks.
 
@@ -143,6 +144,15 @@ Compose is available for production-like process wiring:
 docker compose up --build
 ```
 
+The Compose path starts PostgreSQL, applies the migration with `pixrail-migrate`, then boots the API with `PIXRAIL_STORE_DRIVER=postgres`.
+
+To apply the migration manually:
+
+```sh
+PIXRAIL_DATABASE_URL='postgres://pixrail:pixrail@localhost:5432/pixrail?sslmode=disable' \
+  go run ./cmd/pixrail-migrate
+```
+
 ## How to run tests
 
 ```sh
@@ -150,6 +160,13 @@ go test ./...
 go test -bench=. ./internal/api
 gofmt -w cmd internal
 go vet ./...
+```
+
+Optional PostgreSQL integration test:
+
+```sh
+PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:5432/pixrail?sslmode=disable' \
+  go test ./internal/postgres -run Integration
 ```
 
 ## Failure scenarios

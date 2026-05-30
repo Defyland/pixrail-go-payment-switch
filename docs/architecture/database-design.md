@@ -1,6 +1,6 @@
 # Database Design
 
-The current implementation uses an in-memory store for local execution and tests. The production design maps directly to PostgreSQL.
+The current implementation supports an in-memory store for local execution and tests plus a PostgreSQL adapter for durable payment-rail state. The authoritative migration is `db/migrations/0001_pixrail_core.sql`.
 
 ## Tables
 
@@ -74,6 +74,7 @@ create table processed_spi_callbacks (
 - Create transfer: insert transfer, audit record, and all outbox events in one transaction.
 - Settlement callback: lock transfer by tenant and ID, validate SPI message ID, guard terminal states, update transfer, insert audit record, and insert settlement event.
 - Outbox relay: publish pending events, then mark `published_at` after broker acknowledgement.
+- Migration runner: `go run ./cmd/pixrail-migrate` applies the core schema against `PIXRAIL_DATABASE_URL`.
 
 ## Isolation and rollback
 
