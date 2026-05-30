@@ -72,7 +72,17 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "dependencies": "in-memory adapters"})
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	if err := s.service.Health(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"status":     "unavailable",
+			"dependency": "store",
+			"error":      err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "dependency": "store"})
 }
 
 func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {

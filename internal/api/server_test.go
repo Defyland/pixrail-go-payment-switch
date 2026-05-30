@@ -127,6 +127,21 @@ func TestMetricsEndpointExposesPrometheusText(t *testing.T) {
 	}
 }
 
+func TestReadinessChecksStoreHealth(t *testing.T) {
+	handler := newTestHandler(20)
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected readiness 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "store") {
+		t.Fatalf("expected store dependency evidence, got %s", resp.Body.String())
+	}
+}
+
 func TestOutboxIsTenantScoped(t *testing.T) {
 	handler := newTestHandlerWithKeys(20, map[string]config.APIKey{
 		"secret-a": {TenantID: "tenant_a", Secret: "secret-a"},

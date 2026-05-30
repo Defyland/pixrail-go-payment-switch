@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -35,6 +36,15 @@ func NewMemoryStore() *MemoryStore {
 		idempotency: make(map[string]string),
 		events:      make([]events.OutboxRecord, 0, 128),
 		audit:       make([]AuditRecord, 0, 128),
+	}
+}
+
+func (s *MemoryStore) Health(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
 	}
 }
 
@@ -111,6 +121,70 @@ func (s *MemoryStore) Outbox(_ context.Context) []events.OutboxRecord {
 	records := make([]events.OutboxRecord, len(s.events))
 	copy(records, s.events)
 	return records
+}
+
+func (s *MemoryStore) PendingOutbox(ctx context.Context, limit int) ([]events.OutboxRecord, error) {
+	if err := s.Health(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	now := time.Now().UTC()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	records := make([]events.OutboxRecord, 0, limit)
+	for _, record := range s.events {
+		if record.Published || record.AvailableAt.After(now) {
+			continue
+		}
+		records = append(records, record)
+		if len(records) == limit {
+			break
+		}
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Sequence < records[j].Sequence
+	})
+	return records, nil
+}
+
+func (s *MemoryStore) MarkOutboxPublished(ctx context.Context, sequence int64, dispatchedAt time.Time) error {
+	if err := s.Health(ctx); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.events {
+		if s.events[index].Sequence != sequence {
+			continue
+		}
+		s.events[index].Published = true
+		s.events[index].LastError = ""
+		dispatched := dispatchedAt.UTC()
+		s.events[index].DispatchedAt = &dispatched
+		return nil
+	}
+	return fmt.Errorf("%w: outbox sequence not found", rail.ErrNotFound)
+}
+
+func (s *MemoryStore) MarkOutboxFailed(ctx context.Context, sequence int64, lastError string, retryAt time.Time) error {
+	if err := s.Health(ctx); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.events {
+		if s.events[index].Sequence != sequence {
+			continue
+		}
+		s.events[index].Attempts++
+		s.events[index].LastError = lastError
+		s.events[index].AvailableAt = retryAt.UTC()
+		return nil
+	}
+	return fmt.Errorf("%w: outbox sequence not found", rail.ErrNotFound)
 }
 
 func (s *MemoryStore) Audit(_ context.Context) []AuditRecord {

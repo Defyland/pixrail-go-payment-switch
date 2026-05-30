@@ -19,6 +19,7 @@ import (
 )
 
 type Store interface {
+	Health(ctx context.Context) error
 	FindByIdempotency(ctx context.Context, tenantID, key string) (rail.Transfer, bool)
 	InsertTransfer(ctx context.Context, transfer rail.Transfer, outbox []events.Event, audit []store.AuditRecord) error
 	GetTransfer(ctx context.Context, tenantID, transferID string) (rail.Transfer, error)
@@ -185,6 +186,10 @@ func (s *Service) CreateTransfer(ctx context.Context, req rail.CreateTransferReq
 
 func (s *Service) GetTransfer(ctx context.Context, tenantID, transferID string) (rail.Transfer, error) {
 	return s.store.GetTransfer(ctx, tenantID, transferID)
+}
+
+func (s *Service) Health(ctx context.Context) error {
+	return s.store.Health(ctx)
 }
 
 func (s *Service) RecordSettlement(ctx context.Context, callback rail.SettlementCallback) (Result, error) {
