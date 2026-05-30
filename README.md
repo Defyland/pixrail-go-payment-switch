@@ -152,7 +152,7 @@ To run against PostgreSQL, apply [db/migrations/0001_pixrail_core.sql](db/migrat
 
 ```sh
 PIXRAIL_STORE_DRIVER=postgres \
-PIXRAIL_DATABASE_URL=postgres://pixrail:pixrail@localhost:5432/pixrail \
+PIXRAIL_DATABASE_URL=postgres://pixrail:pixrail@localhost:55432/pixrail?sslmode=disable \
 PIXRAIL_API_KEYS=tenant_demo:dev-secret \
 go run ./cmd/pixrail-api
 ```
@@ -162,7 +162,7 @@ The Compose path starts PostgreSQL, applies the migration with `pixrail-migrate`
 To apply the migration manually:
 
 ```sh
-PIXRAIL_DATABASE_URL='postgres://pixrail:pixrail@localhost:5432/pixrail?sslmode=disable' \
+PIXRAIL_DATABASE_URL='postgres://pixrail:pixrail@localhost:55432/pixrail?sslmode=disable' \
   go run ./cmd/pixrail-migrate
 ```
 
@@ -178,7 +178,7 @@ go vet ./...
 Optional PostgreSQL integration test:
 
 ```sh
-PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:5432/pixrail?sslmode=disable' \
+PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:55432/pixrail?sslmode=disable' \
   go test ./internal/postgres -run Integration
 ```
 
