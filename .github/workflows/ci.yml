@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.10"
+          cache: true
+      - name: Download modules
+        run: go mod download
+      - name: Formatting
+        run: test -z "$(gofmt -l cmd internal)"
+      - name: Vet
+        run: go vet ./...
+      - name: Tests with coverage
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Security scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+      - name: OpenAPI validation
+        run: npx --yes @redocly/cli lint openapi.yaml
+      - name: Docker build validation
+        run: docker build -t pixrail-api:ci .

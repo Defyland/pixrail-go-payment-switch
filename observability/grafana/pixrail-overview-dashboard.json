@@ -1,0 +1,43 @@
+{
+  "title": "PixRail Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "HTTP Requests",
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(pixrail_http_requests_total[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Transfer Decisions",
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(pixrail_transfer_decisions_total[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox Events",
+      "targets": [
+        {
+          "expr": "sum(rate(pixrail_outbox_events_total[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Request Latency p95",
+      "targets": [
+        {
+          "expr": "pixrail_http_request_latency_seconds{quantile=\"0.95\"}"
+        }
+      ]
+    }
+  ]
+}
