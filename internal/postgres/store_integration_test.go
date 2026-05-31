@@ -97,6 +97,13 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if len(pendingSPI) == 0 {
 		t.Fatal("expected pending spi submission")
 	}
+	claimedSPI, replay, err := store.ClaimSPISubmission(ctx, transfer.TenantID, transfer.ID, "claim_"+now.Format("150405000000000"), now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("claim spi: %v", err)
+	}
+	if replay || claimedSPI.SPIClaimToken == "" || claimedSPI.SPISubmissionAttempts != 1 {
+		t.Fatalf("expected claimed spi transfer, replay=%v transfer=%+v", replay, claimedSPI)
+	}
 
 	message := rail.SPIMessage{
 		MessageID:   "spi_" + now.Format("150405000000000"),
@@ -108,7 +115,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spi event: %v", err)
 	}
-	approved, replay, err := store.RecordSPISubmission(ctx, transfer.TenantID, transfer.ID, message, []events.Event{spiEvent}, storepkg.AuditRecord{
+	approved, replay, err := store.RecordSPISubmission(ctx, transfer.TenantID, transfer.ID, claimedSPI.SPIClaimToken, message, []events.Event{spiEvent}, storepkg.AuditRecord{
 		TenantID:      transfer.TenantID,
 		AccountID:     transfer.AccountID,
 		TransferID:    transfer.ID,

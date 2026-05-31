@@ -23,7 +23,9 @@ type Store interface {
 	FindByIdempotency(ctx context.Context, tenantID, key string) (rail.Transfer, bool, error)
 	InsertTransfer(ctx context.Context, transfer rail.Transfer, outbox []events.Event, audit []store.AuditRecord) error
 	GetTransfer(ctx context.Context, tenantID, transferID string) (rail.Transfer, error)
-	RecordSPISubmission(ctx context.Context, tenantID string, transferID string, message rail.SPIMessage, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error)
+	ClaimSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, claimUntil time.Time) (rail.Transfer, bool, error)
+	RecordSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, message rail.SPIMessage, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error)
+	ReleaseSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, lastError string, retryAt time.Time) error
 	RecordReviewDecision(ctx context.Context, tenantID string, transferID string, status rail.TransferStatus, reason string, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, error)
 	UpdateSettlement(ctx context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error)
 	PendingSPISubmissions(ctx context.Context, limit int) ([]rail.Transfer, error)
@@ -51,7 +53,13 @@ type SPIBatchResult struct {
 	Scanned   int
 	Submitted int
 	Replayed  int
+	Skipped   int
 }
+
+const (
+	spiClaimTTL      = 30 * time.Second
+	spiSubmitTimeout = 10 * time.Second
+)
 
 func NewService(store Store, dictResolver dict.Resolver, fraudEngine fraud.Engine, spiClient spi.Client, tenantLimit *ratelimit.Limiter, dictLimit *ratelimit.Limiter) *Service {
 	return &Service{
@@ -196,6 +204,18 @@ func (s *Service) CreateTransfer(ctx context.Context, req rail.CreateTransferReq
 		CreatedAt: now,
 	}}
 	if err := s.store.InsertTransfer(ctx, transfer, outbox, audit); err != nil {
+		if errors.Is(err, rail.ErrConflict) {
+			existing, ok, findErr := s.store.FindByIdempotency(ctx, req.TenantID, req.IdempotencyKey)
+			if findErr != nil {
+				return Result{}, findErr
+			}
+			if ok {
+				if existing.RequestHash != "" && existing.RequestHash != requestHash {
+					return Result{}, fmt.Errorf("%w: idempotency key reused with different request payload", rail.ErrConflict)
+				}
+				return Result{Transfer: existing, IdempotentReplay: true}, nil
+			}
+		}
 		return Result{}, err
 	}
 	return Result{Transfer: transfer, Events: outbox}, nil
@@ -216,22 +236,24 @@ func (s *Service) SubmitToSPI(ctx context.Context, tenantID, transferID, correla
 	if tenantID == "" || transferID == "" {
 		return Result{}, fmt.Errorf("%w: tenant_id and transfer_id are required", rail.ErrValidation)
 	}
-	current, err := s.store.GetTransfer(ctx, tenantID, transferID)
+	claimToken := newID("spiclaim")
+	claimUntil := s.now().UTC().Add(spiClaimTTL)
+	current, replay, err := s.store.ClaimSPISubmission(ctx, tenantID, transferID, claimToken, claimUntil)
 	if err != nil {
 		return Result{}, err
+	}
+	if replay {
+		return Result{Transfer: current, IdempotentReplay: true}, nil
 	}
 	if correlationID == "" {
 		correlationID = current.CorrelationID
 	}
-	if current.Status == rail.StatusApproved && current.SPIMessageID != "" {
-		return Result{Transfer: current, IdempotentReplay: true}, nil
-	}
-	if current.Status != rail.StatusAccepted {
-		return Result{}, fmt.Errorf("%w: transfer is not pending SPI submission", rail.ErrConflict)
-	}
 
-	message, err := s.spi.Submit(ctx, current)
+	spiCtx, cancel := context.WithTimeout(ctx, spiSubmitTimeout)
+	defer cancel()
+	message, err := s.spi.Submit(spiCtx, current)
 	if err != nil {
+		_ = s.store.ReleaseSPISubmission(ctx, tenantID, transferID, claimToken, err.Error(), s.now().UTC().Add(time.Second))
 		return Result{}, err
 	}
 	eventsToWrite := make([]events.Event, 0, 2)
@@ -247,6 +269,7 @@ func (s *Service) SubmitToSPI(ctx context.Context, tenantID, transferID, correla
 		"spi_message_id": message.MessageID,
 		"end_to_end_id":  message.EndToEndID,
 	}); err != nil {
+		_ = s.store.ReleaseSPISubmission(ctx, tenantID, transferID, claimToken, err.Error(), s.now().UTC().Add(time.Second))
 		return Result{}, err
 	}
 	if err := addEvent("pix_transfer_approved", map[string]any{
@@ -254,6 +277,7 @@ func (s *Service) SubmitToSPI(ctx context.Context, tenantID, transferID, correla
 		"spi_message_id":  message.MessageID,
 		"decision_reason": current.DecisionReason,
 	}); err != nil {
+		_ = s.store.ReleaseSPISubmission(ctx, tenantID, transferID, claimToken, err.Error(), s.now().UTC().Add(time.Second))
 		return Result{}, err
 	}
 	audit := store.AuditRecord{
@@ -268,7 +292,7 @@ func (s *Service) SubmitToSPI(ctx context.Context, tenantID, transferID, correla
 		},
 		CreatedAt: message.SubmittedAt,
 	}
-	updated, replay, err := s.store.RecordSPISubmission(ctx, tenantID, transferID, message, eventsToWrite, audit)
+	updated, replay, err := s.store.RecordSPISubmission(ctx, tenantID, transferID, claimToken, message, eventsToWrite, audit)
 	if err != nil {
 		return Result{}, err
 	}
@@ -287,6 +311,10 @@ func (s *Service) SubmitPendingSPI(ctx context.Context, limit int) (SPIBatchResu
 	for _, transfer := range pending {
 		submitted, err := s.SubmitToSPI(ctx, transfer.TenantID, transfer.ID, transfer.CorrelationID)
 		if err != nil {
+			if errors.Is(err, rail.ErrConflict) {
+				result.Skipped++
+				continue
+			}
 			return result, err
 		}
 		if submitted.IdempotentReplay {

@@ -44,28 +44,32 @@ type CreateTransferRequest struct {
 }
 
 type Transfer struct {
-	ID              string
-	TenantID        string
-	AccountID       string
-	IdempotencyKey  string
-	RequestHash     string
-	CorrelationID   string
-	EndToEndID      string
-	AmountCents     int64
-	Currency        string
-	ReceiverKey     string
-	ReceiverKeyType DictKeyType
-	ReceiverName    string
-	ReceiverBank    string
-	ReceiverRisk    int
-	FraudScore      int
-	FraudRules      []string
-	Status          TransferStatus
-	DecisionReason  string
-	SPIMessageID    string
-	SettlementCode  string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                    string
+	TenantID              string
+	AccountID             string
+	IdempotencyKey        string
+	RequestHash           string
+	CorrelationID         string
+	EndToEndID            string
+	AmountCents           int64
+	Currency              string
+	ReceiverKey           string
+	ReceiverKeyType       DictKeyType
+	ReceiverName          string
+	ReceiverBank          string
+	ReceiverRisk          int
+	FraudScore            int
+	FraudRules            []string
+	Status                TransferStatus
+	DecisionReason        string
+	SPIMessageID          string
+	SPIClaimToken         string
+	SPIClaimedUntil       *time.Time
+	SPISubmissionAttempts int
+	SPILastError          string
+	SettlementCode        string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 type DictEntry struct {

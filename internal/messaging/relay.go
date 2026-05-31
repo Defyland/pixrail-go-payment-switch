@@ -2,6 +2,8 @@ package messaging
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -9,9 +11,9 @@ import (
 )
 
 type OutboxStore interface {
-	PendingOutbox(ctx context.Context, limit int) ([]events.OutboxRecord, error)
-	MarkOutboxPublished(ctx context.Context, sequence int64, dispatchedAt time.Time) error
-	MarkOutboxFailed(ctx context.Context, sequence int64, lastError string, retryAt time.Time) error
+	ClaimPendingOutbox(ctx context.Context, limit int, claimToken string, claimUntil time.Time) ([]events.OutboxRecord, error)
+	MarkOutboxPublished(ctx context.Context, sequence int64, claimToken string, dispatchedAt time.Time) error
+	MarkOutboxFailed(ctx context.Context, sequence int64, claimToken string, lastError string, retryAt time.Time) error
 }
 
 type Publisher interface {
@@ -28,6 +30,7 @@ type Relay struct {
 type RetryPolicy struct {
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
+	ClaimTTL       time.Duration
 }
 
 type RelayStats struct {
@@ -43,6 +46,9 @@ func NewRelay(store OutboxStore, publisher Publisher, policy RetryPolicy) *Relay
 	if policy.MaxBackoff <= 0 {
 		policy.MaxBackoff = time.Minute
 	}
+	if policy.ClaimTTL <= 0 {
+		policy.ClaimTTL = 30 * time.Second
+	}
 	return &Relay{
 		store:     store,
 		publisher: publisher,
@@ -52,7 +58,8 @@ func NewRelay(store OutboxStore, publisher Publisher, policy RetryPolicy) *Relay
 }
 
 func (r *Relay) Drain(ctx context.Context, limit int) (RelayStats, error) {
-	records, err := r.store.PendingOutbox(ctx, limit)
+	claimToken := newClaimToken("outbox")
+	records, err := r.store.ClaimPendingOutbox(ctx, limit, claimToken, r.now().UTC().Add(r.policy.ClaimTTL))
 	if err != nil {
 		return RelayStats{}, err
 	}
@@ -62,17 +69,25 @@ func (r *Relay) Drain(ctx context.Context, limit int) (RelayStats, error) {
 		if err := r.publisher.Publish(ctx, record.Event); err != nil {
 			stats.Retried++
 			retryAt := r.now().UTC().Add(r.backoff(record.Attempts + 1))
-			if markErr := r.store.MarkOutboxFailed(ctx, record.Sequence, err.Error(), retryAt); markErr != nil {
+			if markErr := r.store.MarkOutboxFailed(ctx, record.Sequence, claimToken, err.Error(), retryAt); markErr != nil {
 				return stats, fmt.Errorf("mark outbox failed: %w", markErr)
 			}
 			continue
 		}
-		if err := r.store.MarkOutboxPublished(ctx, record.Sequence, r.now().UTC()); err != nil {
+		if err := r.store.MarkOutboxPublished(ctx, record.Sequence, claimToken, r.now().UTC()); err != nil {
 			return stats, fmt.Errorf("mark outbox published: %w", err)
 		}
 		stats.Published++
 	}
 	return stats, nil
+}
+
+func newClaimToken(prefix string) string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+	}
+	return prefix + "_" + hex.EncodeToString(b[:])
 }
 
 func (r *Relay) backoff(attempt int) time.Duration {

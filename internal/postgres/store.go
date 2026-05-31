@@ -83,7 +83,56 @@ func (s *Store) GetTransfer(ctx context.Context, tenantID, transferID string) (r
 	return transfer, err
 }
 
-func (s *Store) RecordSPISubmission(ctx context.Context, tenantID string, transferID string, message rail.SPIMessage, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error) {
+func (s *Store) ClaimSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, claimUntil time.Time) (rail.Transfer, bool, error) {
+	if claimToken == "" || !claimUntil.After(time.Now().UTC()) {
+		return rail.Transfer{}, false, fmt.Errorf("%w: valid spi claim token and expiry are required", rail.ErrValidation)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return rail.Transfer{}, false, err
+	}
+	defer rollback(ctx, tx)
+
+	row := tx.QueryRow(ctx, transferSelectSQL()+` where tenant_id = $1 and id = $2 for update`, tenantID, transferID)
+	transfer, err := scanTransfer(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return rail.Transfer{}, false, rail.ErrNotFound
+	}
+	if err != nil {
+		return rail.Transfer{}, false, err
+	}
+	if transfer.Status == rail.StatusApproved && transfer.SPIMessageID != "" {
+		return transfer, true, tx.Commit(ctx)
+	}
+	if transfer.Status != rail.StatusAccepted {
+		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not pending SPI submission", rail.ErrConflict)
+	}
+	if transfer.SPIClaimedUntil != nil && transfer.SPIClaimedUntil.After(time.Now().UTC()) {
+		return rail.Transfer{}, false, fmt.Errorf("%w: transfer already claimed for SPI submission", rail.ErrConflict)
+	}
+
+	expiresAt := claimUntil.UTC()
+	updatedAt := time.Now().UTC()
+	transfer.SPIClaimToken = claimToken
+	transfer.SPIClaimedUntil = &expiresAt
+	transfer.SPISubmissionAttempts++
+	transfer.SPILastError = ""
+	transfer.UpdatedAt = updatedAt
+	if _, err := tx.Exec(ctx, `
+		update pix_transfers
+		   set spi_claim_token = $1,
+		       spi_claimed_until = $2,
+		       spi_submission_attempts = spi_submission_attempts + 1,
+		       spi_last_error = '',
+		       updated_at = $3
+		 where tenant_id = $4 and id = $5`,
+		claimToken, expiresAt, updatedAt, tenantID, transferID); err != nil {
+		return rail.Transfer{}, false, translatePgError(err)
+	}
+	return transfer, false, tx.Commit(ctx)
+}
+
+func (s *Store) RecordSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, message rail.SPIMessage, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return rail.Transfer{}, false, err
@@ -104,16 +153,28 @@ func (s *Store) RecordSPISubmission(ctx context.Context, tenantID string, transf
 	if transfer.Status != rail.StatusAccepted {
 		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not pending SPI submission", rail.ErrConflict)
 	}
+	if transfer.SPIClaimToken == "" || transfer.SPIClaimToken != claimToken {
+		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not claimed by this SPI worker", rail.ErrConflict)
+	}
 	if message.MessageID == "" || message.EndToEndID == "" {
 		return rail.Transfer{}, false, fmt.Errorf("%w: spi identifiers are required", rail.ErrValidation)
 	}
 	transfer.Status = rail.StatusApproved
 	transfer.SPIMessageID = message.MessageID
 	transfer.EndToEndID = message.EndToEndID
+	transfer.SPIClaimToken = ""
+	transfer.SPIClaimedUntil = nil
+	transfer.SPILastError = ""
 	transfer.UpdatedAt = message.SubmittedAt.UTC()
 	if _, err := tx.Exec(ctx, `
 		update pix_transfers
-		   set status = $1, spi_message_id = $2, end_to_end_id = $3, updated_at = $4
+		   set status = $1,
+		       spi_message_id = $2,
+		       end_to_end_id = $3,
+		       spi_claim_token = '',
+		       spi_claimed_until = null,
+		       spi_last_error = '',
+		       updated_at = $4
 		 where tenant_id = $5 and id = $6`,
 		transfer.Status, transfer.SPIMessageID, transfer.EndToEndID, transfer.UpdatedAt, tenantID, transferID); err != nil {
 		return rail.Transfer{}, false, translatePgError(err)
@@ -127,6 +188,41 @@ func (s *Store) RecordSPISubmission(ctx context.Context, tenantID string, transf
 		return rail.Transfer{}, false, translatePgError(err)
 	}
 	return transfer, false, tx.Commit(ctx)
+}
+
+func (s *Store) ReleaseSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, lastError string, retryAt time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(ctx, tx)
+
+	row := tx.QueryRow(ctx, transferSelectSQL()+` where tenant_id = $1 and id = $2 for update`, tenantID, transferID)
+	transfer, err := scanTransfer(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return rail.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if transfer.Status == rail.StatusApproved && transfer.SPIMessageID != "" {
+		return tx.Commit(ctx)
+	}
+	if transfer.SPIClaimToken == "" || transfer.SPIClaimToken != claimToken {
+		return fmt.Errorf("%w: transfer is not claimed by this SPI worker", rail.ErrConflict)
+	}
+	availableAt := retryAt.UTC()
+	if _, err := tx.Exec(ctx, `
+		update pix_transfers
+		   set spi_claim_token = '',
+		       spi_claimed_until = $1,
+		       spi_last_error = $2,
+		       updated_at = $3
+		 where tenant_id = $4 and id = $5`,
+		availableAt, lastError, time.Now().UTC(), tenantID, transferID); err != nil {
+		return translatePgError(err)
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) RecordReviewDecision(ctx context.Context, tenantID string, transferID string, status rail.TransferStatus, reason string, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, error) {
@@ -295,9 +391,50 @@ func (s *Store) PendingOutbox(ctx context.Context, limit int) ([]events.OutboxRe
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx, outboxSelectSQL()+`
-		where published = false and available_at <= now()
+		where published = false
+		  and available_at <= now()
+		  and (claimed_until is null or claimed_until <= now())
 		order by sequence asc
 		limit $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records, err := scanOutboxRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return records, rows.Err()
+}
+
+func (s *Store) ClaimPendingOutbox(ctx context.Context, limit int, claimToken string, claimUntil time.Time) ([]events.OutboxRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if claimToken == "" || !claimUntil.After(time.Now().UTC()) {
+		return nil, fmt.Errorf("%w: valid outbox claim token and expiry are required", rail.ErrValidation)
+	}
+	rows, err := s.pool.Query(ctx, `
+		with next_records as (
+			select sequence
+			  from payment_outbox
+			 where published = false
+			   and available_at <= now()
+			   and (claimed_until is null or claimed_until <= now())
+			 order by sequence asc
+			 limit $1
+			 for update skip locked
+		)
+		update payment_outbox p
+		   set claim_token = $2,
+		       claimed_until = $3
+		  from next_records n
+		 where p.sequence = n.sequence
+		returning p.sequence, p.event_id, p.event_type, p.schema_version, p.occurred_at, p.producer,
+		          p.tenant_id, p.account_id, p.pix_transfer_id, p.correlation_id, p.payload,
+		          p.published, p.attempts, p.last_error, p.available_at, p.claim_token,
+		          p.claimed_until, p.dispatched_at`,
+		limit, claimToken, claimUntil.UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +451,9 @@ func (s *Store) PendingSPISubmissions(ctx context.Context, limit int) ([]rail.Tr
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx, transferSelectSQL()+`
-		where status = $1 and coalesce(spi_message_id, '') = ''
+		where status = $1
+		  and coalesce(spi_message_id, '') = ''
+		  and (spi_claimed_until is null or spi_claimed_until <= now())
 		order by created_at asc
 		limit $2`, rail.StatusAccepted, limit)
 	if err != nil {
@@ -333,30 +472,38 @@ func (s *Store) PendingSPISubmissions(ctx context.Context, limit int) ([]rail.Tr
 	return transfers, rows.Err()
 }
 
-func (s *Store) MarkOutboxPublished(ctx context.Context, sequence int64, dispatchedAt time.Time) error {
+func (s *Store) MarkOutboxPublished(ctx context.Context, sequence int64, claimToken string, dispatchedAt time.Time) error {
 	tag, err := s.pool.Exec(ctx, `
 		update payment_outbox
-		   set published = true, dispatched_at = $2, last_error = ''
-		 where sequence = $1`, sequence, dispatchedAt.UTC())
+		   set published = true,
+		       dispatched_at = $3,
+		       last_error = '',
+		       claim_token = '',
+		       claimed_until = null
+		 where sequence = $1 and claim_token = $2`, sequence, claimToken, dispatchedAt.UTC())
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return rail.ErrNotFound
+		return fmt.Errorf("%w: outbox record is not claimed by this worker", rail.ErrConflict)
 	}
 	return nil
 }
 
-func (s *Store) MarkOutboxFailed(ctx context.Context, sequence int64, lastError string, retryAt time.Time) error {
+func (s *Store) MarkOutboxFailed(ctx context.Context, sequence int64, claimToken string, lastError string, retryAt time.Time) error {
 	tag, err := s.pool.Exec(ctx, `
 		update payment_outbox
-		   set attempts = attempts + 1, last_error = $2, available_at = $3
-		 where sequence = $1`, sequence, lastError, retryAt.UTC())
+		   set attempts = attempts + 1,
+		       last_error = $3,
+		       available_at = $4,
+		       claim_token = '',
+		       claimed_until = null
+		 where sequence = $1 and claim_token = $2`, sequence, claimToken, lastError, retryAt.UTC())
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return rail.ErrNotFound
+		return fmt.Errorf("%w: outbox record is not claimed by this worker", rail.ErrConflict)
 	}
 	return nil
 }
@@ -388,6 +535,10 @@ func scanTransfer(row transferScanner) (rail.Transfer, error) {
 		&transfer.Status,
 		&transfer.DecisionReason,
 		&transfer.SPIMessageID,
+		&transfer.SPIClaimToken,
+		&transfer.SPIClaimedUntil,
+		&transfer.SPISubmissionAttempts,
+		&transfer.SPILastError,
 		&transfer.SettlementCode,
 		&transfer.CreatedAt,
 		&transfer.UpdatedAt,
@@ -406,6 +557,7 @@ func transferSelectSQL() string {
 		select id, tenant_id, account_id, idempotency_key, request_hash, correlation_id, coalesce(end_to_end_id, ''),
 		       amount_cents, currency, receiver_key, receiver_key_type, receiver_name, receiver_bank,
 		       receiver_risk, fraud_score, fraud_rules, status, decision_reason, coalesce(spi_message_id, ''),
+		       spi_claim_token, spi_claimed_until, spi_submission_attempts, spi_last_error,
 		       settlement_code, created_at, updated_at
 		  from pix_transfers`
 }
@@ -415,21 +567,28 @@ func insertTransfer(ctx context.Context, tx pgx.Tx, transfer rail.Transfer) erro
 	if err != nil {
 		return err
 	}
+	var spiClaimedUntil any
+	if transfer.SPIClaimedUntil != nil {
+		spiClaimedUntil = transfer.SPIClaimedUntil.UTC()
+	}
 	_, err = tx.Exec(ctx, `
 		insert into pix_transfers (
 			id, tenant_id, account_id, idempotency_key, request_hash, correlation_id, end_to_end_id,
 			amount_cents, currency, receiver_key, receiver_key_type, receiver_name, receiver_bank,
 			receiver_risk, fraud_score, fraud_rules, status, decision_reason, spi_message_id,
+			spi_claim_token, spi_claimed_until, spi_submission_attempts, spi_last_error,
 			settlement_code, created_at, updated_at
 		) values (
 			$1, $2, $3, $4, $5, $6, nullif($7, ''),
 			$8, $9, $10, $11, $12, $13,
 			$14, $15, $16, $17, $18, nullif($19, ''),
-			$20, $21, $22
+			$20, $21, $22, $23,
+			$24, $25, $26
 		)`,
 		transfer.ID, transfer.TenantID, transfer.AccountID, transfer.IdempotencyKey, transfer.RequestHash, transfer.CorrelationID, transfer.EndToEndID,
 		transfer.AmountCents, transfer.Currency, transfer.ReceiverKey, transfer.ReceiverKeyType, transfer.ReceiverName, transfer.ReceiverBank,
 		transfer.ReceiverRisk, transfer.FraudScore, fraudRules, transfer.Status, transfer.DecisionReason, transfer.SPIMessageID,
+		transfer.SPIClaimToken, spiClaimedUntil, transfer.SPISubmissionAttempts, transfer.SPILastError,
 		transfer.SettlementCode, transfer.CreatedAt.UTC(), transfer.UpdatedAt.UTC(),
 	)
 	return err
@@ -464,7 +623,8 @@ func insertAudit(ctx context.Context, tx pgx.Tx, record store.AuditRecord) error
 func outboxSelectSQL() string {
 	return `
 		select sequence, event_id, event_type, schema_version, occurred_at, producer, tenant_id, account_id,
-		       pix_transfer_id, correlation_id, payload, published, attempts, last_error, available_at, dispatched_at
+		       pix_transfer_id, correlation_id, payload, published, attempts, last_error, available_at,
+		       claim_token, claimed_until, dispatched_at
 		  from payment_outbox`
 }
 
@@ -488,6 +648,8 @@ func scanOutboxRows(rows pgx.Rows) ([]events.OutboxRecord, error) {
 			&record.Attempts,
 			&record.LastError,
 			&record.AvailableAt,
+			&record.ClaimToken,
+			&record.ClaimedUntil,
 			&record.DispatchedAt,
 		)
 		if err != nil {

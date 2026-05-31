@@ -91,7 +91,42 @@ func (s *MemoryStore) GetTransfer(_ context.Context, tenantID, transferID string
 	return transfer, nil
 }
 
-func (s *MemoryStore) RecordSPISubmission(_ context.Context, tenantID string, transferID string, message rail.SPIMessage, outbox []events.Event, audit AuditRecord) (rail.Transfer, bool, error) {
+func (s *MemoryStore) ClaimSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, claimUntil time.Time) (rail.Transfer, bool, error) {
+	if err := s.Health(ctx); err != nil {
+		return rail.Transfer{}, false, err
+	}
+	if claimToken == "" || !claimUntil.After(time.Now().UTC()) {
+		return rail.Transfer{}, false, fmt.Errorf("%w: valid spi claim token and expiry are required", rail.ErrValidation)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	transfer, ok := s.transfers[transferID]
+	if !ok || transfer.TenantID != tenantID {
+		return rail.Transfer{}, false, rail.ErrNotFound
+	}
+	if transfer.Status == rail.StatusApproved && transfer.SPIMessageID != "" {
+		return transfer, true, nil
+	}
+	if transfer.Status != rail.StatusAccepted {
+		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not pending SPI submission", rail.ErrConflict)
+	}
+	if transfer.SPIClaimedUntil != nil && transfer.SPIClaimedUntil.After(time.Now().UTC()) {
+		return rail.Transfer{}, false, fmt.Errorf("%w: transfer already claimed for SPI submission", rail.ErrConflict)
+	}
+	expiresAt := claimUntil.UTC()
+	transfer.SPIClaimToken = claimToken
+	transfer.SPIClaimedUntil = &expiresAt
+	transfer.SPISubmissionAttempts++
+	transfer.SPILastError = ""
+	transfer.UpdatedAt = time.Now().UTC()
+	s.transfers[transfer.ID] = transfer
+	return transfer, false, nil
+}
+
+func (s *MemoryStore) RecordSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, message rail.SPIMessage, outbox []events.Event, audit AuditRecord) (rail.Transfer, bool, error) {
+	if err := s.Health(ctx); err != nil {
+		return rail.Transfer{}, false, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	transfer, ok := s.transfers[transferID]
@@ -104,17 +139,48 @@ func (s *MemoryStore) RecordSPISubmission(_ context.Context, tenantID string, tr
 	if transfer.Status != rail.StatusAccepted {
 		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not pending SPI submission", rail.ErrConflict)
 	}
+	if transfer.SPIClaimToken == "" || transfer.SPIClaimToken != claimToken {
+		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not claimed by this SPI worker", rail.ErrConflict)
+	}
 	if message.MessageID == "" || message.EndToEndID == "" {
 		return rail.Transfer{}, false, fmt.Errorf("%w: spi identifiers are required", rail.ErrValidation)
 	}
 	transfer.Status = rail.StatusApproved
 	transfer.SPIMessageID = message.MessageID
 	transfer.EndToEndID = message.EndToEndID
+	transfer.SPIClaimToken = ""
+	transfer.SPIClaimedUntil = nil
+	transfer.SPILastError = ""
 	transfer.UpdatedAt = message.SubmittedAt.UTC()
 	s.transfers[transfer.ID] = transfer
 	s.appendEventsLocked(outbox)
 	s.audit = append(s.audit, audit)
 	return transfer, false, nil
+}
+
+func (s *MemoryStore) ReleaseSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, lastError string, retryAt time.Time) error {
+	if err := s.Health(ctx); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	transfer, ok := s.transfers[transferID]
+	if !ok || transfer.TenantID != tenantID {
+		return rail.ErrNotFound
+	}
+	if transfer.Status == rail.StatusApproved && transfer.SPIMessageID != "" {
+		return nil
+	}
+	if transfer.SPIClaimToken == "" || transfer.SPIClaimToken != claimToken {
+		return fmt.Errorf("%w: transfer is not claimed by this SPI worker", rail.ErrConflict)
+	}
+	availableAt := retryAt.UTC()
+	transfer.SPIClaimToken = ""
+	transfer.SPIClaimedUntil = &availableAt
+	transfer.SPILastError = lastError
+	transfer.UpdatedAt = time.Now().UTC()
+	s.transfers[transfer.ID] = transfer
+	return nil
 }
 
 func (s *MemoryStore) RecordReviewDecision(_ context.Context, tenantID string, transferID string, status rail.TransferStatus, reason string, outbox []events.Event, audit AuditRecord) (rail.Transfer, error) {
@@ -194,11 +260,15 @@ func (s *MemoryStore) PendingSPISubmissions(ctx context.Context, limit int) ([]r
 	if limit <= 0 {
 		limit = 100
 	}
+	now := time.Now().UTC()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	transfers := make([]rail.Transfer, 0, limit)
 	for _, transfer := range s.transfers {
 		if transfer.Status != rail.StatusAccepted || transfer.SPIMessageID != "" {
+			continue
+		}
+		if transfer.SPIClaimedUntil != nil && transfer.SPIClaimedUntil.After(now) {
 			continue
 		}
 		transfers = append(transfers, transfer)
@@ -239,6 +309,9 @@ func (s *MemoryStore) PendingOutbox(ctx context.Context, limit int) ([]events.Ou
 		if record.Published || record.AvailableAt.After(now) {
 			continue
 		}
+		if record.ClaimedUntil != nil && record.ClaimedUntil.After(now) {
+			continue
+		}
 		records = append(records, record)
 		if len(records) == limit {
 			break
@@ -250,7 +323,44 @@ func (s *MemoryStore) PendingOutbox(ctx context.Context, limit int) ([]events.Ou
 	return records, nil
 }
 
-func (s *MemoryStore) MarkOutboxPublished(ctx context.Context, sequence int64, dispatchedAt time.Time) error {
+func (s *MemoryStore) ClaimPendingOutbox(ctx context.Context, limit int, claimToken string, claimUntil time.Time) ([]events.OutboxRecord, error) {
+	if err := s.Health(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if claimToken == "" || !claimUntil.After(time.Now().UTC()) {
+		return nil, fmt.Errorf("%w: valid outbox claim token and expiry are required", rail.ErrValidation)
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	records := make([]events.OutboxRecord, 0, limit)
+	for index := range s.events {
+		record := s.events[index]
+		if record.Published || record.AvailableAt.After(now) {
+			continue
+		}
+		if record.ClaimedUntil != nil && record.ClaimedUntil.After(now) {
+			continue
+		}
+		claimExpiry := claimUntil.UTC()
+		s.events[index].ClaimToken = claimToken
+		s.events[index].ClaimedUntil = &claimExpiry
+		records = append(records, s.events[index])
+		if len(records) == limit {
+			break
+		}
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Sequence < records[j].Sequence
+	})
+	return records, nil
+}
+
+func (s *MemoryStore) MarkOutboxPublished(ctx context.Context, sequence int64, claimToken string, dispatchedAt time.Time) error {
 	if err := s.Health(ctx); err != nil {
 		return err
 	}
@@ -260,8 +370,13 @@ func (s *MemoryStore) MarkOutboxPublished(ctx context.Context, sequence int64, d
 		if s.events[index].Sequence != sequence {
 			continue
 		}
+		if s.events[index].ClaimToken == "" || s.events[index].ClaimToken != claimToken {
+			return fmt.Errorf("%w: outbox record is not claimed by this worker", rail.ErrConflict)
+		}
 		s.events[index].Published = true
 		s.events[index].LastError = ""
+		s.events[index].ClaimToken = ""
+		s.events[index].ClaimedUntil = nil
 		dispatched := dispatchedAt.UTC()
 		s.events[index].DispatchedAt = &dispatched
 		return nil
@@ -269,7 +384,7 @@ func (s *MemoryStore) MarkOutboxPublished(ctx context.Context, sequence int64, d
 	return fmt.Errorf("%w: outbox sequence not found", rail.ErrNotFound)
 }
 
-func (s *MemoryStore) MarkOutboxFailed(ctx context.Context, sequence int64, lastError string, retryAt time.Time) error {
+func (s *MemoryStore) MarkOutboxFailed(ctx context.Context, sequence int64, claimToken string, lastError string, retryAt time.Time) error {
 	if err := s.Health(ctx); err != nil {
 		return err
 	}
@@ -279,9 +394,14 @@ func (s *MemoryStore) MarkOutboxFailed(ctx context.Context, sequence int64, last
 		if s.events[index].Sequence != sequence {
 			continue
 		}
+		if s.events[index].ClaimToken == "" || s.events[index].ClaimToken != claimToken {
+			return fmt.Errorf("%w: outbox record is not claimed by this worker", rail.ErrConflict)
+		}
 		s.events[index].Attempts++
 		s.events[index].LastError = lastError
 		s.events[index].AvailableAt = retryAt.UTC()
+		s.events[index].ClaimToken = ""
+		s.events[index].ClaimedUntil = nil
 		return nil
 	}
 	return fmt.Errorf("%w: outbox sequence not found", rail.ErrNotFound)

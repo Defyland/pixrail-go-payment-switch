@@ -102,7 +102,18 @@ func TestMemoryStoreRecordsSPISubmissionAfterAcceptedTransfer(t *testing.T) {
 		t.Fatalf("insert failed: %v", err)
 	}
 
-	updated, replay, err := store.RecordSPISubmission(ctx, "tenant_a", "pxt_1", rail.SPIMessage{
+	claimed, replay, err := store.ClaimSPISubmission(ctx, "tenant_a", "pxt_1", "claim_1", time.Now().UTC().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("claim spi failed: %v", err)
+	}
+	if replay {
+		t.Fatal("first spi claim should not replay")
+	}
+	if claimed.SPIClaimToken != "claim_1" || claimed.SPISubmissionAttempts != 1 {
+		t.Fatalf("expected spi claim evidence, got %+v", claimed)
+	}
+
+	updated, replay, err := store.RecordSPISubmission(ctx, "tenant_a", "pxt_1", "claim_1", rail.SPIMessage{
 		MessageID:   "spi_1",
 		EndToEndID:  "E123",
 		SubmittedAt: time.Now().UTC(),
@@ -117,7 +128,7 @@ func TestMemoryStoreRecordsSPISubmissionAfterAcceptedTransfer(t *testing.T) {
 		t.Fatalf("expected approved with spi id, got %+v", updated)
 	}
 
-	replayed, replay, err := store.RecordSPISubmission(ctx, "tenant_a", "pxt_1", rail.SPIMessage{
+	replayed, replay, err := store.RecordSPISubmission(ctx, "tenant_a", "pxt_1", "claim_1", rail.SPIMessage{
 		MessageID:   "spi_1",
 		EndToEndID:  "E123",
 		SubmittedAt: time.Now().UTC(),
@@ -127,6 +138,22 @@ func TestMemoryStoreRecordsSPISubmissionAfterAcceptedTransfer(t *testing.T) {
 	}
 	if !replay || replayed.Status != rail.StatusApproved {
 		t.Fatalf("expected spi replay, got replay=%v transfer=%+v", replay, replayed)
+	}
+}
+
+func TestMemoryStoreRejectsConcurrentSPIClaim(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	transfer := rail.Transfer{ID: "pxt_1", TenantID: "tenant_a", AccountID: "acct_1", IdempotencyKey: "idem", Status: rail.StatusAccepted, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := store.InsertTransfer(ctx, transfer, nil, nil); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	if _, _, err := store.ClaimSPISubmission(ctx, "tenant_a", "pxt_1", "claim_1", time.Now().UTC().Add(time.Minute)); err != nil {
+		t.Fatalf("first claim failed: %v", err)
+	}
+	if _, _, err := store.ClaimSPISubmission(ctx, "tenant_a", "pxt_1", "claim_2", time.Now().UTC().Add(time.Minute)); !errors.Is(err, rail.ErrConflict) {
+		t.Fatalf("expected concurrent claim conflict, got %v", err)
 	}
 }
 
@@ -146,9 +173,16 @@ func TestMemoryStoreOutboxRelayState(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("expected one pending event, got %d", len(pending))
 	}
+	claimed, err := store.ClaimPendingOutbox(ctx, 10, "outbox_claim_1", time.Now().UTC().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("claim outbox failed: %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].ClaimToken != "outbox_claim_1" {
+		t.Fatalf("expected one claimed event, got %+v", claimed)
+	}
 
 	retryAt := time.Now().UTC().Add(time.Hour)
-	if err := store.MarkOutboxFailed(ctx, pending[0].Sequence, "broker unavailable", retryAt); err != nil {
+	if err := store.MarkOutboxFailed(ctx, claimed[0].Sequence, "outbox_claim_1", "broker unavailable", retryAt); err != nil {
 		t.Fatalf("mark failed: %v", err)
 	}
 	pending, err = store.PendingOutbox(ctx, 10)
@@ -166,7 +200,24 @@ func TestMemoryStoreOutboxRelayState(t *testing.T) {
 	if records[0].Attempts != 1 || records[0].LastError != "broker unavailable" {
 		t.Fatalf("expected failure evidence, got %+v", records[0])
 	}
-	if err := store.MarkOutboxPublished(ctx, records[0].Sequence, time.Now().UTC()); err != nil {
+}
+
+func TestMemoryStorePublishesClaimedOutboxRecord(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	transfer := rail.Transfer{ID: "pxt_1", TenantID: "tenant_a", AccountID: "acct_1", IdempotencyKey: "idem", Status: rail.StatusApproved}
+	event := testEvent(t, "evt_1")
+	if err := store.InsertTransfer(ctx, transfer, []events.Event{event}, nil); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+	records, err := store.ClaimPendingOutbox(ctx, 10, "outbox_claim_1", time.Now().UTC().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one record, got %d", len(records))
+	}
+	if err := store.MarkOutboxPublished(ctx, records[0].Sequence, "outbox_claim_1", time.Now().UTC()); err != nil {
 		t.Fatalf("mark published: %v", err)
 	}
 	records, err = store.Outbox(ctx)

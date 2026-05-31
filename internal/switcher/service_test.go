@@ -3,6 +3,7 @@ package switcher
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -68,6 +69,61 @@ func TestSubmitToSPIApprovesPersistedTransfer(t *testing.T) {
 	}
 	if !replay.IdempotentReplay {
 		t.Fatal("expected idempotent spi submission replay")
+	}
+}
+
+func TestSubmitToSPIClaimsBeforeCallingSPI(t *testing.T) {
+	memory := store.NewMemoryStore()
+	spiClient := &blockingSPIClient{entered: make(chan struct{}), release: make(chan struct{})}
+	service := NewService(memory, dict.StaticResolver{}, fraud.RulesEngine{}, spiClient, nil, nil)
+	created, err := service.CreateTransfer(context.Background(), validRequest())
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	firstErr := make(chan error, 1)
+	go func() {
+		_, submitErr := service.SubmitToSPI(context.Background(), created.Transfer.TenantID, created.Transfer.ID, "corr-spi-1")
+		firstErr <- submitErr
+	}()
+	<-spiClient.entered
+
+	if _, err := service.SubmitToSPI(context.Background(), created.Transfer.TenantID, created.Transfer.ID, "corr-spi-2"); !errors.Is(err, rail.ErrConflict) {
+		t.Fatalf("expected active claim conflict, got %v", err)
+	}
+	close(spiClient.release)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first submit failed: %v", err)
+	}
+	if got := spiClient.callCount(); got != 1 {
+		t.Fatalf("expected exactly one SPI side effect, got %d", got)
+	}
+}
+
+func TestSubmitToSPIReleasesClaimAfterSPIError(t *testing.T) {
+	memory := store.NewMemoryStore()
+	service := NewService(memory, dict.StaticResolver{}, fraud.RulesEngine{}, failingSPIClient{err: errors.New("spi unavailable")}, nil, nil)
+	created, err := service.CreateTransfer(context.Background(), validRequest())
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	if _, err := service.SubmitToSPI(context.Background(), created.Transfer.TenantID, created.Transfer.ID, "corr-spi"); err == nil {
+		t.Fatal("expected spi failure")
+	}
+	transfer, err := memory.GetTransfer(context.Background(), created.Transfer.TenantID, created.Transfer.ID)
+	if err != nil {
+		t.Fatalf("get transfer failed: %v", err)
+	}
+	if transfer.SPIClaimToken != "" || transfer.SPIClaimedUntil == nil || transfer.SPILastError == "" {
+		t.Fatalf("expected released claim with retry evidence, got %+v", transfer)
+	}
+	pending, err := memory.PendingSPISubmissions(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("pending spi failed: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("transfer should wait for retry lease, got %d pending", len(pending))
 	}
 }
 
@@ -279,4 +335,47 @@ type panicSPIClient struct {
 func (c panicSPIClient) Submit(context.Context, rail.Transfer) (rail.SPIMessage, error) {
 	c.t.Fatal("CreateTransfer must not call SPI before durable persistence")
 	return rail.SPIMessage{}, nil
+}
+
+type failingSPIClient struct {
+	err error
+}
+
+func (c failingSPIClient) Submit(context.Context, rail.Transfer) (rail.SPIMessage, error) {
+	return rail.SPIMessage{}, c.err
+}
+
+type blockingSPIClient struct {
+	entered chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	calls   int
+}
+
+func (c *blockingSPIClient) Submit(ctx context.Context, transfer rail.Transfer) (rail.SPIMessage, error) {
+	c.mu.Lock()
+	c.calls++
+	calls := c.calls
+	c.mu.Unlock()
+	if calls > 1 {
+		return rail.SPIMessage{}, errors.New("duplicate SPI side effect")
+	}
+	close(c.entered)
+	select {
+	case <-ctx.Done():
+		return rail.SPIMessage{}, ctx.Err()
+	case <-c.release:
+		return rail.SPIMessage{
+			MessageID:   "spi_blocking_1",
+			EndToEndID:  "E2026053100000000001",
+			TransferID:  transfer.ID,
+			SubmittedAt: time.Now().UTC(),
+		}, nil
+	}
+}
+
+func (c *blockingSPIClient) callCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
 }

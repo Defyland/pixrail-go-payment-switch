@@ -47,5 +47,7 @@ type OutboxRecord struct {
 	Attempts     int
 	LastError    string
 	AvailableAt  time.Time
+	ClaimToken   string
+	ClaimedUntil *time.Time
 	DispatchedAt *time.Time
 }
