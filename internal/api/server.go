@@ -2,10 +2,15 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,11 +25,18 @@ import (
 )
 
 type Server struct {
-	service *switcher.Service
-	keys    map[string]config.APIKey
-	metrics *observability.Metrics
-	logger  *slog.Logger
-	mux     *http.ServeMux
+	service  *switcher.Service
+	keys     map[string]config.APIKey
+	metrics  *observability.Metrics
+	logger   *slog.Logger
+	mux      *http.ServeMux
+	security SecurityConfig
+	now      func() time.Time
+}
+
+type SecurityConfig struct {
+	ProviderCallbackSecret string
+	SignatureTolerance     time.Duration
 }
 
 type contextKey string
@@ -35,19 +47,28 @@ const (
 	correlationKey contextKey = "correlation_id"
 )
 
-func NewServer(service *switcher.Service, keys map[string]config.APIKey, metrics *observability.Metrics, logger *slog.Logger) *Server {
+func NewServer(service *switcher.Service, keys map[string]config.APIKey, metrics *observability.Metrics, logger *slog.Logger, security ...SecurityConfig) *Server {
 	if metrics == nil {
 		metrics = observability.NewMetrics()
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
+	securityConfig := SecurityConfig{SignatureTolerance: 5 * time.Minute}
+	if len(security) > 0 {
+		securityConfig = security[0]
+	}
+	if securityConfig.SignatureTolerance <= 0 {
+		securityConfig.SignatureTolerance = 5 * time.Minute
+	}
 	server := &Server{
-		service: service,
-		keys:    keys,
-		metrics: metrics,
-		logger:  logger,
-		mux:     http.NewServeMux(),
+		service:  service,
+		keys:     keys,
+		metrics:  metrics,
+		logger:   logger,
+		mux:      http.NewServeMux(),
+		security: securityConfig,
+		now:      time.Now,
 	}
 	server.routes()
 	return server
@@ -190,8 +211,12 @@ type settlementPayload struct {
 }
 
 func (s *Server) recordSettlement(w http.ResponseWriter, r *http.Request) {
+	raw, ok := s.readAndVerifyProviderCallback(w, r)
+	if !ok {
+		return
+	}
 	var payload settlementPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := json.Unmarshal(raw, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON", nil)
 		return
 	}
@@ -211,6 +236,49 @@ func (s *Server) recordSettlement(w http.ResponseWriter, r *http.Request) {
 	s.metrics.ObserveDecision(string(result.Transfer.Status))
 	s.metrics.ObserveEvents(len(result.Events))
 	writeJSON(w, http.StatusOK, transferResponse(result.Transfer, result.IdempotentReplay))
+}
+
+func (s *Server) readAndVerifyProviderCallback(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body is too large or unreadable", nil)
+		return nil, false
+	}
+	secret := strings.TrimSpace(s.security.ProviderCallbackSecret)
+	if secret == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "provider callback signature is required", nil)
+		return nil, false
+	}
+	timestamp := strings.TrimSpace(r.Header.Get("X-PixRail-Timestamp"))
+	signature := strings.TrimSpace(r.Header.Get("X-PixRail-Signature"))
+	if timestamp == "" || signature == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "provider callback signature is required", nil)
+		return nil, false
+	}
+	epoch, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "provider callback timestamp is invalid", nil)
+		return nil, false
+	}
+	signedAt := time.Unix(epoch, 0)
+	if delta := s.now().UTC().Sub(signedAt.UTC()); delta > s.security.SignatureTolerance || delta < -s.security.SignatureTolerance {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "provider callback timestamp is outside tolerance", nil)
+		return nil, false
+	}
+	expected := providerCallbackSignature(secret, timestamp, raw)
+	if !hmac.Equal([]byte(signature), []byte(expected)) {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "provider callback signature is invalid", nil)
+		return nil, false
+	}
+	return raw, true
+}
+
+func providerCallbackSignature(secret string, timestamp string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(timestamp))
+	_, _ = mac.Write([]byte("."))
+	_, _ = mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func (s *Server) outbox(w http.ResponseWriter, r *http.Request) {

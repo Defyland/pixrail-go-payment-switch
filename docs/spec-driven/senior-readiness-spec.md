@@ -35,7 +35,7 @@ Additional senior-gate consistency criteria:
 
 ## Security Bar
 
-Security evidence must cover role-scoped API keys, tenant isolation, BOLA, abuse cases, rate-limit bypass, idempotency abuse, audit logging, secrets, and data classification. High-risk controls must have tests when practical.
+Security evidence must cover role-scoped API keys, signed provider callbacks, tenant isolation, BOLA, abuse cases, rate-limit bypass, idempotency abuse, audit logging, secrets, and data classification. High-risk controls must have tests when practical.
 
 ## Observability Bar
 
@@ -85,6 +85,7 @@ The project must run Go tests, race tests, vet, OpenAPI validation, security sca
 | Readiness reflects dependency health | `internal/api/server.go`, `internal/api/server_test.go` | Done | Health remains liveness; readiness checks store health. |
 | Outbox relay has retry semantics | `internal/messaging/relay.go`, `internal/messaging/relay_test.go`, `internal/store/memory.go` | Done | Relay handles publish ack and retry evidence. |
 | Security model covers BOLA, roles, and secrets | `docs/security/threat-model.md`, `docs/security/authorization-matrix.md`, `docs/security/abuse-cases.md`, `docs/security/secrets.md` | Done | Tests cover tenant isolation, auth, and forbidden operational roles. |
+| Provider callbacks are signed | `internal/api/server.go`, `internal/api/server_test.go`, `docs/security/threat-model.md` | Done | Callback body requires timestamped HMAC signature before settlement processing. |
 | Observability has domain metrics and runbooks | `internal/observability/metrics.go`, `observability/grafana/pixrail-overview-dashboard.json`, `docs/observability/overview.md`, `docs/runbooks/` | Done | Domain decision/outbox metrics are present. |
 | Performance evidence is measured | `benchmarks/results/2026-05-30-local-baseline.md`, `internal/api/server_test.go`, `benchmarks/k6/` | Done | Native p50/p95/p99 plus k6 smoke/load/stress/spike output recorded. |
 | Scalability and cost are explicit | `docs/scalability.md`, `docs/operational-cost.md` | Done | Names bottlenecks and accepted cost. |

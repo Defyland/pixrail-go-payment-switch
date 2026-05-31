@@ -74,7 +74,7 @@ Detailed domain evidence lives in [docs/domain](docs/domain), and the senior cas
 
 The HTTP contract is versioned under `/v1` and documented in [openapi.yaml](openapi.yaml). Examples live in [docs/api/request-response-examples.md](docs/api/request-response-examples.md), and the shared error envelope is documented in [docs/api/error-format.md](docs/api/error-format.md).
 
-Authentication accepts either `Authorization: Bearer <api-key>` or `X-API-Key: <api-key>`. API keys are role-scoped: `tenant` keys create/read transfers, `worker` keys submit accepted transfers to SPI, `risk` keys resolve manual reviews, and `provider` keys send settlement callbacks. Local development seeds `dev-secret`, `worker-secret`, `risk-secret`, and `provider-secret` for tenant `tenant_demo`; production requires `PIXRAIL_API_KEYS`.
+Authentication accepts either `Authorization: Bearer <api-key>` or `X-API-Key: <api-key>`. API keys are role-scoped: `tenant` keys create/read transfers, `worker` keys submit accepted transfers to SPI, `risk` keys resolve manual reviews, and `provider` keys send signed settlement callbacks. Local development seeds `dev-secret`, `worker-secret`, `risk-secret`, and `provider-secret` for tenant `tenant_demo`; production requires `PIXRAIL_API_KEYS` and `PIXRAIL_PROVIDER_CALLBACK_SECRET`.
 
 ## Async or event architecture
 
@@ -117,7 +117,7 @@ PixRail exposes:
 
 ## Security considerations
 
-Security coverage is documented in [docs/security/threat-model.md](docs/security/threat-model.md), [docs/security/authorization-matrix.md](docs/security/authorization-matrix.md), [docs/security/abuse-cases.md](docs/security/abuse-cases.md), [docs/security/data-classification.md](docs/security/data-classification.md), and [docs/security/secrets.md](docs/security/secrets.md). The implementation covers role-scoped API key authentication, tenant isolation, idempotency, rate limiting, input validation, audit logging, correlation IDs, production config guards, and environment-based secret configuration.
+Security coverage is documented in [docs/security/threat-model.md](docs/security/threat-model.md), [docs/security/authorization-matrix.md](docs/security/authorization-matrix.md), [docs/security/abuse-cases.md](docs/security/abuse-cases.md), [docs/security/data-classification.md](docs/security/data-classification.md), and [docs/security/secrets.md](docs/security/secrets.md). The implementation covers role-scoped API key authentication, HMAC-signed provider callbacks, tenant isolation, idempotency, rate limiting, input validation, audit logging, correlation IDs, production config guards, and environment-based secret configuration.
 
 ## Trade-offs and decisions
 
@@ -167,6 +167,7 @@ PIXRAIL_STORE_DRIVER=postgres \
 PIXRAIL_HTTP_ADDR=:18080 \
 PIXRAIL_DATABASE_URL=postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable \
 PIXRAIL_API_KEYS=tenant_demo:dev-secret:tenant,tenant_demo:worker-secret:worker,tenant_demo:risk-secret:risk,tenant_demo:provider-secret:provider \
+PIXRAIL_PROVIDER_CALLBACK_SECRET=dev-provider-callback-secret \
 go run ./cmd/pixrail-api
 ```
 
@@ -176,6 +177,7 @@ To run the worker manually against the same PostgreSQL database:
 PIXRAIL_STORE_DRIVER=postgres \
 PIXRAIL_DATABASE_URL=postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable \
 PIXRAIL_API_KEYS=tenant_demo:dev-secret:tenant,tenant_demo:worker-secret:worker,tenant_demo:risk-secret:risk,tenant_demo:provider-secret:provider \
+PIXRAIL_PROVIDER_CALLBACK_SECRET=dev-provider-callback-secret \
 PIXRAIL_WORKER_BATCH_SIZE=100 \
 PIXRAIL_WORKER_INTERVAL=1s \
 go run ./cmd/pixrail-worker
@@ -217,6 +219,7 @@ PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:15432/pixrail?ss
 - duplicate transfer requests replay the original response without new events
 - duplicate transfer requests with a different payload return `409`
 - duplicate terminal SPI callbacks replay only when the callback hash matches
+- unsigned or stale provider callbacks return `401`
 - active SPI or outbox leases prevent concurrent workers from duplicating the same local work item
 - wrong tenant cannot read another tenant transfer
 

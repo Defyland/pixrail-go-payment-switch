@@ -16,6 +16,7 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - SPI and outbox worker claim leases
 - long-running SPI submission worker process
 - role-scoped API keys for tenant, worker, risk, and provider actions
+- HMAC-signed provider callbacks
 - request-fingerprint idempotency
 - callback-hash settlement dedupe
 - executable manual review resolution
@@ -65,6 +66,7 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 | Pending SPI work has an operational process | Add `cmd/pixrail-worker` and wire it into Compose. |
 | Idempotency is payload-aware | Store request fingerprint and return `409` on mismatched reuse. |
 | Operational surfaces are role-scoped | Require separate API key roles for tenant API, SPI worker, risk review, and provider callback actions. |
+| Provider callbacks are tamper-evident | Require timestamped HMAC signatures on SPI callback requests. |
 | Review state is operational | Add review decision operation that approves into SPI-pending state or blocks. |
 | Callback replay is strict | Store callback hash and reject conflicting terminal callbacks. |
 | Readiness is not fake | Add store health interface and readiness failure tests. |
@@ -98,4 +100,3 @@ docker build -t pixrail-api:local .
 - Broker-backed outbox publisher.
 - Redis-backed distributed rate limiter.
 - Real DICT/SPI provider adapters.
-- Signed provider callbacks beyond role-scoped local SPI message and callback-hash validation.

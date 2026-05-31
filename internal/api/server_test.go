@@ -23,6 +23,8 @@ import (
 	"github.com/Defyland/pixrail-go-payment-switch/internal/switcher"
 )
 
+const testProviderCallbackSecret = "test-provider-callback-secret"
+
 func TestTransferLifecycleRequestFlow(t *testing.T) {
 	handler := newTestHandler(20)
 	createPayload := `{"account_id":"acct_123","amount_cents":12345,"currency":"BRL","receiver_key":"receiver@example.com","receiver_key_type":"EMAIL","description":"invoice 123"}`
@@ -70,6 +72,7 @@ func TestTransferLifecycleRequestFlow(t *testing.T) {
 	settlePayload := `{"spi_message_id":"` + spiMessageID + `","status":"accepted","code":"ACSC"}`
 	settle := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", settlePayload, false)
 	settle.Header.Set("Authorization", "Bearer provider-secret")
+	signProviderCallback(t, settle, settlePayload)
 	settleResponse := httptest.NewRecorder()
 	handler.ServeHTTP(settleResponse, settle)
 	if settleResponse.Code != http.StatusOK {
@@ -78,6 +81,45 @@ func TestTransferLifecycleRequestFlow(t *testing.T) {
 	settled := decodeBody(t, settleResponse.Body.Bytes())["data"].(map[string]any)
 	if settled["status"] != "settled" {
 		t.Fatalf("expected settled, got %+v", settled)
+	}
+}
+
+func TestProviderCallbackRequiresValidSignature(t *testing.T) {
+	handler := newTestHandler(20)
+	create := request(handler, http.MethodPost, "/v1/pix/transfers", `{"account_id":"acct_123","amount_cents":12345,"currency":"BRL","receiver_key":"receiver@example.com","receiver_key_type":"EMAIL"}`, true)
+	create.Header.Set("Idempotency-Key", "idem-provider-signature")
+	createResponse := httptest.NewRecorder()
+	handler.ServeHTTP(createResponse, create)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("expected create 201, got %d: %s", createResponse.Code, createResponse.Body.String())
+	}
+	transferID := decodeBody(t, createResponse.Body.Bytes())["data"].(map[string]any)["id"].(string)
+
+	submit := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-submissions", `{}`, false)
+	submit.Header.Set("Authorization", "Bearer worker-secret")
+	submitResponse := httptest.NewRecorder()
+	handler.ServeHTTP(submitResponse, submit)
+	if submitResponse.Code != http.StatusOK {
+		t.Fatalf("expected worker submit 200, got %d: %s", submitResponse.Code, submitResponse.Body.String())
+	}
+	spiMessageID := decodeBody(t, submitResponse.Body.Bytes())["data"].(map[string]any)["spi_message_id"].(string)
+	payload := `{"spi_message_id":"` + spiMessageID + `","status":"accepted","code":"ACSC"}`
+
+	unsigned := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", payload, false)
+	unsigned.Header.Set("Authorization", "Bearer provider-secret")
+	unsignedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unsignedResponse, unsigned)
+	if unsignedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unsigned callback 401, got %d", unsignedResponse.Code)
+	}
+
+	signed := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", payload, false)
+	signed.Header.Set("Authorization", "Bearer provider-secret")
+	signProviderCallback(t, signed, payload)
+	signedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(signedResponse, signed)
+	if signedResponse.Code != http.StatusOK {
+		t.Fatalf("expected signed callback 200, got %d: %s", signedResponse.Code, signedResponse.Body.String())
 	}
 }
 
@@ -318,6 +360,7 @@ func newTestHandlerWithKeys(capacity int, keys map[string]config.APIKey) http.Ha
 		keys,
 		observability.NewMetrics(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		SecurityConfig{ProviderCallbackSecret: testProviderCallbackSecret, SignatureTolerance: 5 * time.Minute},
 	)
 	return server.Handler()
 }
@@ -339,6 +382,13 @@ func decodeBody(t *testing.T, raw []byte) map[string]any {
 		t.Fatalf("decode response: %v\n%s", err, raw)
 	}
 	return body
+}
+
+func signProviderCallback(t *testing.T, req *http.Request, body string) {
+	t.Helper()
+	timestamp := fmt.Sprintf("%d", time.Now().UTC().Unix())
+	req.Header.Set("X-PixRail-Timestamp", timestamp)
+	req.Header.Set("X-PixRail-Signature", providerCallbackSignature(testProviderCallbackSecret, timestamp, []byte(body)))
 }
 
 func latencyPercentile(samples []time.Duration, quantile float64) time.Duration {

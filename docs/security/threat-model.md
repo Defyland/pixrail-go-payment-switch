@@ -34,6 +34,8 @@
 | DICT abuse | tenant, account, and key-lookup rate limits |
 | SPI duplicate callback | unique SPI message IDs plus processed callback hash dedupe |
 | Tenant key triggering operational side effects | role-scoped API keys for tenant, worker, risk, and provider endpoints |
+| Forged provider callback | HMAC-SHA256 signature over callback timestamp and raw body |
+| Stale provider callback replay | signed timestamp tolerance plus existing callback-hash idempotency |
 | Duplicate SPI worker submission | persisted SPI claim token, claim TTL, bounded SPI submit timeout, and claim-token checked persistence |
 | Duplicate outbox publish by concurrent relays | outbox claim token and lease checked before publish/failure updates |
 | Fraud bypass | decision log with score, rules, DICT result, and correlation ID |
@@ -45,6 +47,7 @@
 
 - API key authentication rejects unauthenticated requests.
 - API keys without the required endpoint role return `403`.
+- Provider callbacks without a valid HMAC signature return `401`.
 - Tenant isolation returns `404` for cross-tenant transfer reads.
 - Idempotency returns the original transfer without duplicating outbox records.
 - Idempotency rejects the same key with a different request fingerprint.
@@ -57,11 +60,10 @@
 
 ## Secret management
 
-Production must provide `PIXRAIL_API_KEYS=tenant_id:secret[:role|role]`. The local `dev-secret`, `worker-secret`, `risk-secret`, and `provider-secret` fallbacks are disabled when `PIXRAIL_ENV=production`.
+Production must provide `PIXRAIL_API_KEYS=tenant_id:secret[:role|role]` and `PIXRAIL_PROVIDER_CALLBACK_SECRET`. The local `dev-secret`, `worker-secret`, `risk-secret`, `provider-secret`, and `dev-provider-callback-secret` fallbacks are disabled when `PIXRAIL_ENV=production`.
 
 ## Residual risks
 
 - Real SPI, DICT, and anti-fraud providers are simulated in the MVP.
-- Real provider callbacks still need request signing before external integration.
 - Service mesh is deferred; app-level idempotency and tracing are the primary controls.
 - Full Event Sourcing is deferred because payment rail state is not the financial ledger.

@@ -31,36 +31,40 @@ func (k APIKey) HasRole(role APIKeyRole) bool {
 }
 
 type Config struct {
-	Addr                     string
-	Environment              string
-	APIKeys                  map[string]APIKey
-	StoreDriver              string
-	DatabaseURL              string
-	TenantBucketSize         int
-	DictBucketSize           int
-	DictTimeout              time.Duration
-	WorkerBatchSize          int
-	WorkerInterval           time.Duration
-	ShutdownTimeout          time.Duration
-	RequireConfiguredSecrets bool
-	TracingExporter          string
+	Addr                       string
+	Environment                string
+	APIKeys                    map[string]APIKey
+	StoreDriver                string
+	DatabaseURL                string
+	TenantBucketSize           int
+	DictBucketSize             int
+	DictTimeout                time.Duration
+	WorkerBatchSize            int
+	WorkerInterval             time.Duration
+	ProviderCallbackSecret     string
+	ProviderSignatureTolerance time.Duration
+	ShutdownTimeout            time.Duration
+	RequireConfiguredSecrets   bool
+	TracingExporter            string
 }
 
 func Load() (Config, error) {
 	env := getenv("PIXRAIL_ENV", "development")
 	cfg := Config{
-		Addr:                     getenv("PIXRAIL_HTTP_ADDR", ":8080"),
-		Environment:              env,
-		StoreDriver:              getenv("PIXRAIL_STORE_DRIVER", "memory"),
-		DatabaseURL:              getenv("PIXRAIL_DATABASE_URL", ""),
-		TenantBucketSize:         getenvInt("PIXRAIL_TENANT_BUCKET_SIZE", 120),
-		DictBucketSize:           getenvInt("PIXRAIL_DICT_BUCKET_SIZE", 60),
-		DictTimeout:              getenvDuration("PIXRAIL_DICT_TIMEOUT", 300*time.Millisecond),
-		WorkerBatchSize:          getenvInt("PIXRAIL_WORKER_BATCH_SIZE", 100),
-		WorkerInterval:           getenvDuration("PIXRAIL_WORKER_INTERVAL", time.Second),
-		ShutdownTimeout:          getenvDuration("PIXRAIL_SHUTDOWN_TIMEOUT", 5*time.Second),
-		RequireConfiguredSecrets: env == "production",
-		TracingExporter:          getenv("PIXRAIL_TRACING_EXPORTER", defaultTracingExporter(env)),
+		Addr:                       getenv("PIXRAIL_HTTP_ADDR", ":8080"),
+		Environment:                env,
+		StoreDriver:                getenv("PIXRAIL_STORE_DRIVER", "memory"),
+		DatabaseURL:                getenv("PIXRAIL_DATABASE_URL", ""),
+		TenantBucketSize:           getenvInt("PIXRAIL_TENANT_BUCKET_SIZE", 120),
+		DictBucketSize:             getenvInt("PIXRAIL_DICT_BUCKET_SIZE", 60),
+		DictTimeout:                getenvDuration("PIXRAIL_DICT_TIMEOUT", 300*time.Millisecond),
+		WorkerBatchSize:            getenvInt("PIXRAIL_WORKER_BATCH_SIZE", 100),
+		WorkerInterval:             getenvDuration("PIXRAIL_WORKER_INTERVAL", time.Second),
+		ProviderCallbackSecret:     getenv("PIXRAIL_PROVIDER_CALLBACK_SECRET", defaultProviderCallbackSecret(env)),
+		ProviderSignatureTolerance: getenvDuration("PIXRAIL_PROVIDER_SIGNATURE_TOLERANCE", 5*time.Minute),
+		ShutdownTimeout:            getenvDuration("PIXRAIL_SHUTDOWN_TIMEOUT", 5*time.Second),
+		RequireConfiguredSecrets:   env == "production",
+		TracingExporter:            getenv("PIXRAIL_TRACING_EXPORTER", defaultTracingExporter(env)),
 	}
 
 	keys, err := parseAPIKeys(os.Getenv("PIXRAIL_API_KEYS"))
@@ -75,6 +79,9 @@ func Load() (Config, error) {
 		keys["worker-secret"] = APIKey{TenantID: "tenant_demo", Secret: "worker-secret", Roles: roleSet(RoleWorker)}
 		keys["risk-secret"] = APIKey{TenantID: "tenant_demo", Secret: "risk-secret", Roles: roleSet(RoleRisk)}
 		keys["provider-secret"] = APIKey{TenantID: "tenant_demo", Secret: "provider-secret", Roles: roleSet(RoleProvider)}
+	}
+	if cfg.RequireConfiguredSecrets && cfg.ProviderCallbackSecret == "" {
+		return Config{}, fmt.Errorf("PIXRAIL_PROVIDER_CALLBACK_SECRET is required in production")
 	}
 	if cfg.StoreDriver != "memory" && cfg.StoreDriver != "postgres" {
 		return Config{}, fmt.Errorf("PIXRAIL_STORE_DRIVER must be memory or postgres")
@@ -97,6 +104,13 @@ func defaultTracingExporter(env string) string {
 		return "none"
 	}
 	return "stdout"
+}
+
+func defaultProviderCallbackSecret(env string) string {
+	if env == "production" {
+		return ""
+	}
+	return "dev-provider-callback-secret"
 }
 
 func parseAPIKeys(raw string) (map[string]APIKey, error) {

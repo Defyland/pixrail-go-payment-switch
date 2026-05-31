@@ -9,7 +9,7 @@
 | `GET /v1/pix/transfers/{id}` | `tenant` | API key tenant | Cross-tenant reads return `404`. |
 | `POST /v1/pix/transfers/{id}/spi-submissions` | `worker` | API key tenant | Operational worker action; tenant keys cannot trigger SPI side effects. |
 | `POST /v1/pix/transfers/{id}/reviews` | `risk` | API key tenant | Manual risk decision path; tenant and worker keys are forbidden. |
-| `POST /v1/pix/transfers/{id}/spi-callbacks` | `provider` | API key tenant | Local provider simulation; production should add signed provider callbacks. |
+| `POST /v1/pix/transfers/{id}/spi-callbacks` | `provider` plus HMAC callback signature | API key tenant | Requires `X-PixRail-Timestamp` and `X-PixRail-Signature` over `timestamp.body`. |
 | `GET /v1/outbox` | `tenant` | API key tenant | Local inspection endpoint filtered by tenant; production should move this behind admin tooling. |
 
 API keys are configured with `PIXRAIL_API_KEYS=tenant_id:secret[:role|role]`.

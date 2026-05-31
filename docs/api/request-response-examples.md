@@ -97,11 +97,13 @@ Approving a review moves the transfer back to `accepted` and emits a new `spi_su
 ```sh
 curl -s -X POST http://localhost:8080/v1/pix/transfers/pxt_123/spi-callbacks \
   -H 'Authorization: Bearer provider-secret' \
+  -H 'X-PixRail-Timestamp: 1780224000' \
+  -H 'X-PixRail-Signature: sha256=<hmac_sha256(timestamp.body)>' \
   -H 'Content-Type: application/json' \
   -d '{"spi_message_id":"spi_123","status":"accepted","code":"ACSC"}'
 ```
 
-Accepted callbacks move an approved transfer to `settled`. Repeated callbacks with the same callback hash replay the terminal state. A terminal callback with a different SPI message ID or conflicting callback payload returns `409 conflict`.
+Accepted callbacks move an approved transfer to `settled`. Provider callbacks must include `X-PixRail-Timestamp` and `X-PixRail-Signature`; the signature is HMAC-SHA256 over `timestamp.body` using `PIXRAIL_PROVIDER_CALLBACK_SECRET`. Repeated callbacks with the same callback hash replay the terminal state. A terminal callback with a different SPI message ID or conflicting callback payload returns `409 conflict`.
 
 ## Authorization failure
 

@@ -49,9 +49,20 @@ func TestParseAPIKeysRejectsMalformedEntries(t *testing.T) {
 func TestLoadRequiresAPIKeysInProduction(t *testing.T) {
 	t.Setenv("PIXRAIL_ENV", "production")
 	t.Setenv("PIXRAIL_API_KEYS", "")
+	t.Setenv("PIXRAIL_PROVIDER_CALLBACK_SECRET", "provider-callback-secret")
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected production config to require API keys")
+	}
+}
+
+func TestLoadRequiresProviderCallbackSecretInProduction(t *testing.T) {
+	t.Setenv("PIXRAIL_ENV", "production")
+	t.Setenv("PIXRAIL_API_KEYS", "tenant_a:secret-a")
+	t.Setenv("PIXRAIL_PROVIDER_CALLBACK_SECRET", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected production config to require provider callback secret")
 	}
 }
 
@@ -69,11 +80,15 @@ func TestLoadProvidesDevelopmentKey(t *testing.T) {
 	if !cfg.APIKeys["worker-secret"].HasRole(RoleWorker) || !cfg.APIKeys["risk-secret"].HasRole(RoleRisk) || !cfg.APIKeys["provider-secret"].HasRole(RoleProvider) {
 		t.Fatalf("expected role-separated development API keys, got %+v", cfg.APIKeys)
 	}
+	if cfg.ProviderCallbackSecret == "" || cfg.ProviderSignatureTolerance.String() != "5m0s" {
+		t.Fatalf("expected development provider callback defaults, got secret=%q tolerance=%s", cfg.ProviderCallbackSecret, cfg.ProviderSignatureTolerance)
+	}
 }
 
 func TestLoadRejectsProductionMemoryStore(t *testing.T) {
 	t.Setenv("PIXRAIL_ENV", "production")
 	t.Setenv("PIXRAIL_API_KEYS", "tenant_a:secret-a")
+	t.Setenv("PIXRAIL_PROVIDER_CALLBACK_SECRET", "provider-callback-secret")
 	t.Setenv("PIXRAIL_STORE_DRIVER", "memory")
 
 	if _, err := Load(); err == nil {
@@ -111,6 +126,7 @@ func TestLoadTracingExporterDefaults(t *testing.T) {
 	t.Setenv("PIXRAIL_STORE_DRIVER", "postgres")
 	t.Setenv("PIXRAIL_DATABASE_URL", "postgres://example")
 	t.Setenv("PIXRAIL_TRACING_EXPORTER", "")
+	t.Setenv("PIXRAIL_PROVIDER_CALLBACK_SECRET", "provider-callback-secret")
 
 	cfg, err = Load()
 	if err != nil {

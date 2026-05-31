@@ -5,6 +5,8 @@ services:
       PIXRAIL_ENV: development
       PIXRAIL_HTTP_ADDR: :8080
       PIXRAIL_API_KEYS: tenant_demo:dev-secret:tenant,tenant_demo:worker-secret:worker,tenant_demo:risk-secret:risk,tenant_demo:provider-secret:provider
+      PIXRAIL_PROVIDER_CALLBACK_SECRET: dev-provider-callback-secret
+      PIXRAIL_PROVIDER_SIGNATURE_TOLERANCE: 5m
       PIXRAIL_STORE_DRIVER: postgres
       PIXRAIL_DATABASE_URL: postgres://pixrail:pixrail@postgres:5432/pixrail?sslmode=disable
       PIXRAIL_TRACING_EXPORTER: none
@@ -19,6 +21,8 @@ services:
     environment:
       PIXRAIL_ENV: development
       PIXRAIL_API_KEYS: tenant_demo:dev-secret:tenant,tenant_demo:worker-secret:worker,tenant_demo:risk-secret:risk,tenant_demo:provider-secret:provider
+      PIXRAIL_PROVIDER_CALLBACK_SECRET: dev-provider-callback-secret
+      PIXRAIL_PROVIDER_SIGNATURE_TOLERANCE: 5m
       PIXRAIL_STORE_DRIVER: postgres
       PIXRAIL_DATABASE_URL: postgres://pixrail:pixrail@postgres:5432/pixrail?sslmode=disable
       PIXRAIL_TRACING_EXPORTER: none

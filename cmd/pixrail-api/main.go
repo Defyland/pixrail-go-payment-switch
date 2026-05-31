@@ -37,7 +37,10 @@ func main() {
 	}
 	defer closeStore()
 	service := app.NewService(cfg, store)
-	server := api.NewServer(service, cfg.APIKeys, observability.NewMetrics(), logger)
+	server := api.NewServer(service, cfg.APIKeys, observability.NewMetrics(), logger, api.SecurityConfig{
+		ProviderCallbackSecret: cfg.ProviderCallbackSecret,
+		SignatureTolerance:     cfg.ProviderSignatureTolerance,
+	})
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           server.Handler(),
