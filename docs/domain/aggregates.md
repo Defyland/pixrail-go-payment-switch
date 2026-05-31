@@ -7,9 +7,11 @@ Aggregate root: `Transfer`.
 Consistency boundary:
 
 - idempotency key belongs to `(tenant_id, idempotency_key)`
+- request fingerprint belongs to the idempotency key and rejects mismatched replay
 - fraud decision and SPI identifiers belong to the transfer
+- SPI identifiers can only be recorded after the transfer is already accepted
 - settlement callback can only mutate the matching transfer
-- terminal transfer cannot transition again
+- terminal transfer cannot transition again unless the callback hash is the same replay
 
 ## Outbox Record
 

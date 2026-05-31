@@ -118,6 +118,60 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+  /v1/pix/transfers/{id}/spi-submissions:
+    post:
+      summary: Submit a persisted accepted transfer to the simulated SPI rail
+      operationId: submitPixTransferToSPI
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SPI submission recorded or replayed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/pix/transfers/{id}/reviews:
+    post:
+      summary: Record a manual fraud review decision
+      operationId: recordPixTransferReview
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewDecisionRequest"
+      responses:
+        "200":
+          description: Review decision recorded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /v1/pix/transfers/{id}/spi-callbacks:
     post:
       summary: Record a simulated SPI settlement callback
@@ -236,6 +290,15 @@ components:
           enum: [accepted, rejected]
         code:
           type: string
+    ReviewDecisionRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approve, block]
+        reason:
+          type: string
     TransferResponse:
       type: object
       required: [data, meta]
@@ -260,7 +323,7 @@ components:
           type: string
         status:
           type: string
-          enum: [approved, blocked, review, settled, rejected]
+          enum: [accepted, approved, blocked, review, settled, rejected]
         amount_cents:
           type: integer
         currency:

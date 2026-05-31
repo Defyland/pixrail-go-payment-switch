@@ -63,6 +63,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /metrics", s.metricsHandler)
 	s.mux.Handle("POST /v1/pix/transfers", s.auth(http.HandlerFunc(s.createTransfer)))
 	s.mux.Handle("GET /v1/pix/transfers/{id}", s.auth(http.HandlerFunc(s.getTransfer)))
+	s.mux.Handle("POST /v1/pix/transfers/{id}/spi-submissions", s.auth(http.HandlerFunc(s.submitToSPI)))
+	s.mux.Handle("POST /v1/pix/transfers/{id}/reviews", s.auth(http.HandlerFunc(s.recordReview)))
 	s.mux.Handle("POST /v1/pix/transfers/{id}/spi-callbacks", s.auth(http.HandlerFunc(s.recordSettlement)))
 	s.mux.Handle("GET /v1/outbox", s.auth(http.HandlerFunc(s.outbox)))
 }
@@ -140,6 +142,45 @@ func (s *Server) getTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, transferResponse(transfer, false))
+}
+
+func (s *Server) submitToSPI(w http.ResponseWriter, r *http.Request) {
+	result, err := s.service.SubmitToSPI(r.Context(), tenantFromContext(r.Context()), r.PathValue("id"), correlationFromContext(r.Context()))
+	if err != nil {
+		s.handleDomainError(w, err)
+		return
+	}
+	s.metrics.ObserveDecision(string(result.Transfer.Status))
+	s.metrics.ObserveEvents(len(result.Events))
+	writeJSON(w, http.StatusOK, transferResponse(result.Transfer, result.IdempotentReplay))
+}
+
+type reviewPayload struct {
+	Decision rail.ReviewDecision `json:"decision"`
+	Reason   string              `json:"reason"`
+}
+
+func (s *Server) recordReview(w http.ResponseWriter, r *http.Request) {
+	var payload reviewPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON", nil)
+		return
+	}
+	result, err := s.service.RecordReview(r.Context(), rail.ReviewDecisionRequest{
+		TenantID:      tenantFromContext(r.Context()),
+		TransferID:    r.PathValue("id"),
+		Decision:      payload.Decision,
+		Reason:        payload.Reason,
+		CorrelationID: correlationFromContext(r.Context()),
+		ReviewedAt:    time.Now().UTC(),
+	})
+	if err != nil {
+		s.handleDomainError(w, err)
+		return
+	}
+	s.metrics.ObserveDecision(string(result.Transfer.Status))
+	s.metrics.ObserveEvents(len(result.Events))
+	writeJSON(w, http.StatusOK, transferResponse(result.Transfer, result.IdempotentReplay))
 }
 
 type settlementPayload struct {
@@ -337,6 +378,12 @@ func routeLabel(r *http.Request) string {
 	path := r.URL.Path
 	if strings.HasPrefix(path, "/v1/pix/transfers/") && strings.HasSuffix(path, "/spi-callbacks") {
 		return "/v1/pix/transfers/{id}/spi-callbacks"
+	}
+	if strings.HasPrefix(path, "/v1/pix/transfers/") && strings.HasSuffix(path, "/spi-submissions") {
+		return "/v1/pix/transfers/{id}/spi-submissions"
+	}
+	if strings.HasPrefix(path, "/v1/pix/transfers/") && strings.HasSuffix(path, "/reviews") {
+		return "/v1/pix/transfers/{id}/reviews"
 	}
 	if strings.HasPrefix(path, "/v1/pix/transfers/") {
 		return "/v1/pix/transfers/{id}"

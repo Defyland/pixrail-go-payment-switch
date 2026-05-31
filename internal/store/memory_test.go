@@ -49,32 +49,84 @@ func TestMemoryStoreUpdatesSettlementOnce(t *testing.T) {
 		t.Fatalf("insert failed: %v", err)
 	}
 
-	updated, err := store.UpdateSettlement(ctx, "tenant_a", "pxt_1", rail.SettlementCallback{
+	callback := rail.SettlementCallback{
+		TenantID:     "tenant_a",
 		TransferID:   "pxt_1",
 		SPIMessageID: "spi_1",
 		Status:       rail.SettlementAccepted,
 		Code:         "ACSC",
 		ReceivedAt:   time.Now().UTC(),
-	}, nil, AuditRecord{})
+	}
+	callback.CallbackHash = callback.Fingerprint()
+	updated, replay, err := store.UpdateSettlement(ctx, "tenant_a", "pxt_1", callback, nil, AuditRecord{})
 	if err != nil {
 		t.Fatalf("settlement failed: %v", err)
+	}
+	if replay {
+		t.Fatal("first settlement should not be a replay")
 	}
 	if updated.Status != rail.StatusSettled {
 		t.Fatalf("expected settled, got %s", updated.Status)
 	}
 
-	replayed, err := store.UpdateSettlement(ctx, "tenant_a", "pxt_1", rail.SettlementCallback{
+	replayed, replay, err := store.UpdateSettlement(ctx, "tenant_a", "pxt_1", callback, nil, AuditRecord{})
+	if err != nil {
+		t.Fatalf("terminal replay failed: %v", err)
+	}
+	if !replay {
+		t.Fatal("expected same callback to replay")
+	}
+	if replayed.Status != rail.StatusSettled {
+		t.Fatalf("terminal state should not change, got %s", replayed.Status)
+	}
+
+	conflicting := rail.SettlementCallback{
+		TenantID:     "tenant_a",
 		TransferID:   "pxt_1",
 		SPIMessageID: "spi_1",
 		Status:       rail.SettlementRejected,
 		Code:         "RJCT",
 		ReceivedAt:   time.Now().UTC(),
-	}, nil, AuditRecord{})
-	if err != nil {
-		t.Fatalf("terminal replay failed: %v", err)
 	}
-	if replayed.Status != rail.StatusSettled {
-		t.Fatalf("terminal state should not change, got %s", replayed.Status)
+	conflicting.CallbackHash = conflicting.Fingerprint()
+	if _, _, err := store.UpdateSettlement(ctx, "tenant_a", "pxt_1", conflicting, nil, AuditRecord{}); !errors.Is(err, rail.ErrConflict) {
+		t.Fatalf("expected conflicting callback to fail, got %v", err)
+	}
+}
+
+func TestMemoryStoreRecordsSPISubmissionAfterAcceptedTransfer(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	transfer := rail.Transfer{ID: "pxt_1", TenantID: "tenant_a", AccountID: "acct_1", IdempotencyKey: "idem", Status: rail.StatusAccepted, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := store.InsertTransfer(ctx, transfer, nil, nil); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	updated, replay, err := store.RecordSPISubmission(ctx, "tenant_a", "pxt_1", rail.SPIMessage{
+		MessageID:   "spi_1",
+		EndToEndID:  "E123",
+		SubmittedAt: time.Now().UTC(),
+	}, nil, AuditRecord{CreatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("record spi failed: %v", err)
+	}
+	if replay {
+		t.Fatal("first spi submission should not replay")
+	}
+	if updated.Status != rail.StatusApproved || updated.SPIMessageID != "spi_1" {
+		t.Fatalf("expected approved with spi id, got %+v", updated)
+	}
+
+	replayed, replay, err := store.RecordSPISubmission(ctx, "tenant_a", "pxt_1", rail.SPIMessage{
+		MessageID:   "spi_1",
+		EndToEndID:  "E123",
+		SubmittedAt: time.Now().UTC(),
+	}, nil, AuditRecord{CreatedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("replay spi failed: %v", err)
+	}
+	if !replay || replayed.Status != rail.StatusApproved {
+		t.Fatalf("expected spi replay, got replay=%v transfer=%+v", replay, replayed)
 	}
 }
 

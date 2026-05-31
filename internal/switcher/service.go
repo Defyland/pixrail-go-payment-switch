@@ -23,7 +23,10 @@ type Store interface {
 	FindByIdempotency(ctx context.Context, tenantID, key string) (rail.Transfer, bool, error)
 	InsertTransfer(ctx context.Context, transfer rail.Transfer, outbox []events.Event, audit []store.AuditRecord) error
 	GetTransfer(ctx context.Context, tenantID, transferID string) (rail.Transfer, error)
-	UpdateSettlement(ctx context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, error)
+	RecordSPISubmission(ctx context.Context, tenantID string, transferID string, message rail.SPIMessage, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error)
+	RecordReviewDecision(ctx context.Context, tenantID string, transferID string, status rail.TransferStatus, reason string, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, error)
+	UpdateSettlement(ctx context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error)
+	PendingSPISubmissions(ctx context.Context, limit int) ([]rail.Transfer, error)
 	Outbox(ctx context.Context) ([]events.OutboxRecord, error)
 	Audit(ctx context.Context) ([]store.AuditRecord, error)
 }
@@ -42,6 +45,12 @@ type Result struct {
 	Transfer         rail.Transfer
 	IdempotentReplay bool
 	Events           []events.Event
+}
+
+type SPIBatchResult struct {
+	Scanned   int
+	Submitted int
+	Replayed  int
 }
 
 func NewService(store Store, dictResolver dict.Resolver, fraudEngine fraud.Engine, spiClient spi.Client, tenantLimit *ratelimit.Limiter, dictLimit *ratelimit.Limiter) *Service {
@@ -71,10 +80,14 @@ func (s *Service) CreateTransfer(ctx context.Context, req rail.CreateTransferReq
 	if err := req.Validate(); err != nil {
 		return Result{}, err
 	}
+	requestHash := req.Fingerprint()
 
 	if transfer, ok, err := s.store.FindByIdempotency(ctx, req.TenantID, req.IdempotencyKey); err != nil {
 		return Result{}, err
 	} else if ok {
+		if transfer.RequestHash != "" && transfer.RequestHash != requestHash {
+			return Result{}, fmt.Errorf("%w: idempotency key reused with different request payload", rail.ErrConflict)
+		}
 		return Result{Transfer: transfer, IdempotentReplay: true}, nil
 	}
 	if s.tenantLimit != nil && !s.tenantLimit.Allow(req.TenantID+":"+req.AccountID) {
@@ -96,6 +109,11 @@ func (s *Service) CreateTransfer(ctx context.Context, req rail.CreateTransferReq
 	if err != nil {
 		return Result{}, err
 	}
+	switch decision.Status {
+	case rail.StatusAccepted, rail.StatusReview, rail.StatusBlocked:
+	default:
+		return Result{}, fmt.Errorf("%w: fraud decision status is invalid", rail.ErrDependencyFailed)
+	}
 
 	now := s.now().UTC()
 	transfer := rail.Transfer{
@@ -103,6 +121,7 @@ func (s *Service) CreateTransfer(ctx context.Context, req rail.CreateTransferReq
 		TenantID:        req.TenantID,
 		AccountID:       req.AccountID,
 		IdempotencyKey:  req.IdempotencyKey,
+		RequestHash:     requestHash,
 		CorrelationID:   req.CorrelationID,
 		AmountCents:     req.AmountCents,
 		Currency:        req.Currency,
@@ -143,22 +162,18 @@ func (s *Service) CreateTransfer(ctx context.Context, req rail.CreateTransferReq
 		"rules":  decision.Rules,
 	})
 
-	if decision.Status == rail.StatusApproved {
-		message, err := s.spi.Submit(ctx, transfer)
-		if err != nil {
-			return Result{}, err
-		}
-		transfer.SPIMessageID = message.MessageID
-		transfer.EndToEndID = message.EndToEndID
-		transfer.UpdatedAt = message.SubmittedAt
-		addEvent("spi_message_created", map[string]any{
-			"spi_message_id": message.MessageID,
-			"end_to_end_id":  message.EndToEndID,
-		})
-		addEvent("pix_transfer_approved", map[string]any{
-			"end_to_end_id":   message.EndToEndID,
-			"spi_message_id":  message.MessageID,
+	if decision.Status == rail.StatusAccepted {
+		addEvent("pix_transfer_accepted", map[string]any{
 			"decision_reason": transfer.DecisionReason,
+		})
+		addEvent("spi_submission_requested", map[string]any{
+			"request_hash": requestHash,
+		})
+	} else if decision.Status == rail.StatusReview {
+		addEvent("pix_transfer_review_requested", map[string]any{
+			"score":           decision.Score,
+			"rules":           decision.Rules,
+			"decision_reason": decision.Reason,
 		})
 	} else if decision.Status == rail.StatusBlocked {
 		addEvent("pix_transfer_blocked", map[string]any{
@@ -194,6 +209,182 @@ func (s *Service) Health(ctx context.Context) error {
 	return s.store.Health(ctx)
 }
 
+func (s *Service) SubmitToSPI(ctx context.Context, tenantID, transferID, correlationID string) (Result, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	transferID = strings.TrimSpace(transferID)
+	correlationID = strings.TrimSpace(correlationID)
+	if tenantID == "" || transferID == "" {
+		return Result{}, fmt.Errorf("%w: tenant_id and transfer_id are required", rail.ErrValidation)
+	}
+	current, err := s.store.GetTransfer(ctx, tenantID, transferID)
+	if err != nil {
+		return Result{}, err
+	}
+	if correlationID == "" {
+		correlationID = current.CorrelationID
+	}
+	if current.Status == rail.StatusApproved && current.SPIMessageID != "" {
+		return Result{Transfer: current, IdempotentReplay: true}, nil
+	}
+	if current.Status != rail.StatusAccepted {
+		return Result{}, fmt.Errorf("%w: transfer is not pending SPI submission", rail.ErrConflict)
+	}
+
+	message, err := s.spi.Submit(ctx, current)
+	if err != nil {
+		return Result{}, err
+	}
+	eventsToWrite := make([]events.Event, 0, 2)
+	addEvent := func(eventType string, payload any) error {
+		event, eventErr := events.New(newID("evt"), eventType, current.TenantID, current.AccountID, current.ID, correlationID, s.now(), payload)
+		if eventErr != nil {
+			return eventErr
+		}
+		eventsToWrite = append(eventsToWrite, event)
+		return nil
+	}
+	if err := addEvent("spi_message_created", map[string]any{
+		"spi_message_id": message.MessageID,
+		"end_to_end_id":  message.EndToEndID,
+	}); err != nil {
+		return Result{}, err
+	}
+	if err := addEvent("pix_transfer_approved", map[string]any{
+		"end_to_end_id":   message.EndToEndID,
+		"spi_message_id":  message.MessageID,
+		"decision_reason": current.DecisionReason,
+	}); err != nil {
+		return Result{}, err
+	}
+	audit := store.AuditRecord{
+		TenantID:      current.TenantID,
+		AccountID:     current.AccountID,
+		TransferID:    current.ID,
+		Action:        "spi_submission_recorded",
+		CorrelationID: correlationID,
+		Metadata: map[string]string{
+			"spi_message_id": message.MessageID,
+			"end_to_end_id":  message.EndToEndID,
+		},
+		CreatedAt: message.SubmittedAt,
+	}
+	updated, replay, err := s.store.RecordSPISubmission(ctx, tenantID, transferID, message, eventsToWrite, audit)
+	if err != nil {
+		return Result{}, err
+	}
+	if replay {
+		return Result{Transfer: updated, IdempotentReplay: true}, nil
+	}
+	return Result{Transfer: updated, Events: eventsToWrite}, nil
+}
+
+func (s *Service) SubmitPendingSPI(ctx context.Context, limit int) (SPIBatchResult, error) {
+	pending, err := s.store.PendingSPISubmissions(ctx, limit)
+	if err != nil {
+		return SPIBatchResult{}, err
+	}
+	result := SPIBatchResult{Scanned: len(pending)}
+	for _, transfer := range pending {
+		submitted, err := s.SubmitToSPI(ctx, transfer.TenantID, transfer.ID, transfer.CorrelationID)
+		if err != nil {
+			return result, err
+		}
+		if submitted.IdempotentReplay {
+			result.Replayed++
+			continue
+		}
+		result.Submitted++
+	}
+	return result, nil
+}
+
+func (s *Service) RecordReview(ctx context.Context, req rail.ReviewDecisionRequest) (Result, error) {
+	req.TenantID = strings.TrimSpace(req.TenantID)
+	req.TransferID = strings.TrimSpace(req.TransferID)
+	req.CorrelationID = strings.TrimSpace(req.CorrelationID)
+	req.Reason = strings.TrimSpace(req.Reason)
+	if req.ReviewedAt.IsZero() {
+		req.ReviewedAt = s.now().UTC()
+	}
+	if req.TenantID == "" || req.TransferID == "" {
+		return Result{}, fmt.Errorf("%w: tenant_id and transfer_id are required", rail.ErrValidation)
+	}
+	current, err := s.store.GetTransfer(ctx, req.TenantID, req.TransferID)
+	if err != nil {
+		return Result{}, err
+	}
+	if current.Status != rail.StatusReview {
+		return Result{}, fmt.Errorf("%w: transfer is not waiting for review", rail.ErrConflict)
+	}
+	if req.CorrelationID == "" {
+		req.CorrelationID = current.CorrelationID
+	}
+
+	nextStatus := rail.StatusAccepted
+	eventType := "pix_transfer_review_approved"
+	if req.Decision == rail.ReviewBlock {
+		nextStatus = rail.StatusBlocked
+		eventType = "pix_transfer_review_blocked"
+	} else if req.Decision != rail.ReviewApprove {
+		return Result{}, fmt.Errorf("%w: review decision must be approve or block", rail.ErrValidation)
+	}
+	reason := req.Reason
+	if reason == "" {
+		reason = "manual review approved"
+		if nextStatus == rail.StatusBlocked {
+			reason = "manual review blocked"
+		}
+	}
+
+	eventsToWrite := make([]events.Event, 0, 2)
+	addEvent := func(eventType string, payload any) error {
+		event, eventErr := events.New(newID("evt"), eventType, current.TenantID, current.AccountID, current.ID, req.CorrelationID, req.ReviewedAt, payload)
+		if eventErr != nil {
+			return eventErr
+		}
+		eventsToWrite = append(eventsToWrite, event)
+		return nil
+	}
+	if err := addEvent(eventType, map[string]any{
+		"decision": string(req.Decision),
+		"reason":   reason,
+	}); err != nil {
+		return Result{}, err
+	}
+	if nextStatus == rail.StatusAccepted {
+		if err := addEvent("spi_submission_requested", map[string]any{
+			"request_hash": current.RequestHash,
+		}); err != nil {
+			return Result{}, err
+		}
+	} else if nextStatus == rail.StatusBlocked {
+		if err := addEvent("pix_transfer_blocked", map[string]any{
+			"score":           current.FraudScore,
+			"rules":           current.FraudRules,
+			"decision_reason": reason,
+		}); err != nil {
+			return Result{}, err
+		}
+	}
+	audit := store.AuditRecord{
+		TenantID:      current.TenantID,
+		AccountID:     current.AccountID,
+		TransferID:    current.ID,
+		Action:        "manual_review_recorded",
+		CorrelationID: req.CorrelationID,
+		Metadata: map[string]string{
+			"decision": string(req.Decision),
+			"status":   string(nextStatus),
+		},
+		CreatedAt: req.ReviewedAt,
+	}
+	updated, err := s.store.RecordReviewDecision(ctx, req.TenantID, req.TransferID, nextStatus, reason, eventsToWrite, audit)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Transfer: updated, Events: eventsToWrite}, nil
+}
+
 func (s *Service) RecordSettlement(ctx context.Context, callback rail.SettlementCallback) (Result, error) {
 	if callback.ReceivedAt.IsZero() {
 		callback.ReceivedAt = s.now().UTC()
@@ -204,18 +395,26 @@ func (s *Service) RecordSettlement(ctx context.Context, callback rail.Settlement
 	if callback.TenantID == "" || callback.TransferID == "" || callback.SPIMessageID == "" {
 		return Result{}, fmt.Errorf("%w: tenant_id, transfer_id, and spi_message_id are required", rail.ErrValidation)
 	}
+	if callback.CallbackHash == "" {
+		callback.CallbackHash = callback.Fingerprint()
+	}
 
 	current, err := s.store.GetTransfer(ctx, callback.TenantID, callback.TransferID)
 	if err != nil {
 		return Result{}, err
 	}
-	if current.Status.Terminal() {
-		return Result{Transfer: current, IdempotentReplay: true}, nil
+	if current.SPIMessageID == "" || current.SPIMessageID != callback.SPIMessageID {
+		return Result{}, fmt.Errorf("%w: spi_message_id mismatch", rail.ErrConflict)
 	}
 
-	eventType := "pix_transfer_settled"
-	if callback.Status == rail.SettlementRejected {
+	var eventType string
+	switch callback.Status {
+	case rail.SettlementAccepted:
+		eventType = "pix_transfer_settled"
+	case rail.SettlementRejected:
 		eventType = "pix_transfer_rejected"
+	default:
+		return Result{}, fmt.Errorf("%w: unsupported settlement status", rail.ErrValidation)
 	}
 	event, err := events.New(newID("evt"), eventType, current.TenantID, current.AccountID, current.ID, callback.CorrelationID, callback.ReceivedAt, map[string]any{
 		"spi_message_id": callback.SPIMessageID,
@@ -237,9 +436,12 @@ func (s *Service) RecordSettlement(ctx context.Context, callback rail.Settlement
 		},
 		CreatedAt: callback.ReceivedAt,
 	}
-	updated, err := s.store.UpdateSettlement(ctx, callback.TenantID, callback.TransferID, callback, []events.Event{event}, audit)
+	updated, replay, err := s.store.UpdateSettlement(ctx, callback.TenantID, callback.TransferID, callback, []events.Event{event}, audit)
 	if err != nil {
 		return Result{}, err
+	}
+	if replay {
+		return Result{Transfer: updated, IdempotentReplay: true}, nil
 	}
 	return Result{Transfer: updated, Events: []events.Event{event}}, nil
 }

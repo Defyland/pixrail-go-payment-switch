@@ -15,6 +15,7 @@ type MemoryStore struct {
 	mu          sync.RWMutex
 	transfers   map[string]rail.Transfer
 	idempotency map[string]string
+	callbacks   map[string]string
 	events      []events.OutboxRecord
 	audit       []AuditRecord
 	nextSeq     int64
@@ -34,6 +35,7 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		transfers:   make(map[string]rail.Transfer),
 		idempotency: make(map[string]string),
+		callbacks:   make(map[string]string),
 		events:      make([]events.OutboxRecord, 0, 128),
 		audit:       make([]AuditRecord, 0, 128),
 	}
@@ -89,18 +91,84 @@ func (s *MemoryStore) GetTransfer(_ context.Context, tenantID, transferID string
 	return transfer, nil
 }
 
-func (s *MemoryStore) UpdateSettlement(_ context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit AuditRecord) (rail.Transfer, error) {
+func (s *MemoryStore) RecordSPISubmission(_ context.Context, tenantID string, transferID string, message rail.SPIMessage, outbox []events.Event, audit AuditRecord) (rail.Transfer, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	transfer, ok := s.transfers[transferID]
+	if !ok || transfer.TenantID != tenantID {
+		return rail.Transfer{}, false, rail.ErrNotFound
+	}
+	if transfer.Status == rail.StatusApproved && transfer.SPIMessageID == message.MessageID {
+		return transfer, true, nil
+	}
+	if transfer.Status != rail.StatusAccepted {
+		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not pending SPI submission", rail.ErrConflict)
+	}
+	if message.MessageID == "" || message.EndToEndID == "" {
+		return rail.Transfer{}, false, fmt.Errorf("%w: spi identifiers are required", rail.ErrValidation)
+	}
+	transfer.Status = rail.StatusApproved
+	transfer.SPIMessageID = message.MessageID
+	transfer.EndToEndID = message.EndToEndID
+	transfer.UpdatedAt = message.SubmittedAt.UTC()
+	s.transfers[transfer.ID] = transfer
+	s.appendEventsLocked(outbox)
+	s.audit = append(s.audit, audit)
+	return transfer, false, nil
+}
+
+func (s *MemoryStore) RecordReviewDecision(_ context.Context, tenantID string, transferID string, status rail.TransferStatus, reason string, outbox []events.Event, audit AuditRecord) (rail.Transfer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	transfer, ok := s.transfers[transferID]
 	if !ok || transfer.TenantID != tenantID {
 		return rail.Transfer{}, rail.ErrNotFound
 	}
+	if transfer.Status != rail.StatusReview {
+		return rail.Transfer{}, fmt.Errorf("%w: transfer is not waiting for review", rail.ErrConflict)
+	}
+	switch status {
+	case rail.StatusAccepted, rail.StatusBlocked:
+	default:
+		return rail.Transfer{}, fmt.Errorf("%w: review can only accept or block", rail.ErrValidation)
+	}
+	transfer.Status = status
+	if reason != "" {
+		transfer.DecisionReason = reason
+	}
+	transfer.UpdatedAt = audit.CreatedAt.UTC()
+	s.transfers[transfer.ID] = transfer
+	s.appendEventsLocked(outbox)
+	s.audit = append(s.audit, audit)
+	return transfer, nil
+}
+
+func (s *MemoryStore) UpdateSettlement(_ context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit AuditRecord) (rail.Transfer, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	transfer, ok := s.transfers[transferID]
+	if !ok || transfer.TenantID != tenantID {
+		return rail.Transfer{}, false, rail.ErrNotFound
+	}
 	if transfer.SPIMessageID == "" || transfer.SPIMessageID != callback.SPIMessageID {
-		return rail.Transfer{}, fmt.Errorf("%w: spi_message_id mismatch", rail.ErrConflict)
+		return rail.Transfer{}, false, fmt.Errorf("%w: spi_message_id mismatch", rail.ErrConflict)
+	}
+	callbackHash := callback.CallbackHash
+	if callbackHash == "" {
+		callbackHash = callback.Fingerprint()
+	}
+	callbackKey := tenantID + ":" + callback.SPIMessageID
+	if existingHash, ok := s.callbacks[callbackKey]; ok {
+		if existingHash == callbackHash {
+			return transfer, true, nil
+		}
+		return rail.Transfer{}, false, fmt.Errorf("%w: conflicting settlement callback for terminal transfer", rail.ErrConflict)
 	}
 	if transfer.Status.Terminal() {
-		return transfer, nil
+		return rail.Transfer{}, false, fmt.Errorf("%w: terminal transfer has no matching callback hash", rail.ErrConflict)
+	}
+	if transfer.Status != rail.StatusApproved {
+		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not approved for settlement callback", rail.ErrConflict)
 	}
 	switch callback.Status {
 	case rail.SettlementAccepted:
@@ -108,14 +176,40 @@ func (s *MemoryStore) UpdateSettlement(_ context.Context, tenantID string, trans
 	case rail.SettlementRejected:
 		transfer.Status = rail.StatusRejected
 	default:
-		return rail.Transfer{}, fmt.Errorf("%w: unsupported settlement status", rail.ErrValidation)
+		return rail.Transfer{}, false, fmt.Errorf("%w: unsupported settlement status", rail.ErrValidation)
 	}
 	transfer.SettlementCode = callback.Code
 	transfer.UpdatedAt = callback.ReceivedAt.UTC()
 	s.transfers[transfer.ID] = transfer
+	s.callbacks[callbackKey] = callbackHash
 	s.appendEventsLocked(outbox)
 	s.audit = append(s.audit, audit)
-	return transfer, nil
+	return transfer, false, nil
+}
+
+func (s *MemoryStore) PendingSPISubmissions(ctx context.Context, limit int) ([]rail.Transfer, error) {
+	if err := s.Health(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	transfers := make([]rail.Transfer, 0, limit)
+	for _, transfer := range s.transfers {
+		if transfer.Status != rail.StatusAccepted || transfer.SPIMessageID != "" {
+			continue
+		}
+		transfers = append(transfers, transfer)
+	}
+	sort.Slice(transfers, func(i, j int) bool {
+		return transfers[i].CreatedAt.Before(transfers[j].CreatedAt)
+	})
+	if len(transfers) > limit {
+		transfers = transfers[:limit]
+	}
+	return transfers, nil
 }
 
 func (s *MemoryStore) Outbox(ctx context.Context) ([]events.OutboxRecord, error) {

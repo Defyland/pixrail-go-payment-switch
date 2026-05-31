@@ -40,8 +40,11 @@ func TestTransferLifecycleRequestFlow(t *testing.T) {
 	data := body["data"].(map[string]any)
 	transferID := data["id"].(string)
 	spiMessageID := data["spi_message_id"].(string)
-	if data["status"] != "approved" {
-		t.Fatalf("expected approved, got %+v", data)
+	if data["status"] != "accepted" {
+		t.Fatalf("expected accepted, got %+v", data)
+	}
+	if spiMessageID != "" {
+		t.Fatalf("create must not submit to SPI before durable persistence: %+v", data)
 	}
 
 	get := request(handler, http.MethodGet, "/v1/pix/transfers/"+transferID, "", true)
@@ -49,6 +52,18 @@ func TestTransferLifecycleRequestFlow(t *testing.T) {
 	handler.ServeHTTP(getResponse, get)
 	if getResponse.Code != http.StatusOK {
 		t.Fatalf("expected 200 get, got %d: %s", getResponse.Code, getResponse.Body.String())
+	}
+
+	submit := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-submissions", `{}`, true)
+	submitResponse := httptest.NewRecorder()
+	handler.ServeHTTP(submitResponse, submit)
+	if submitResponse.Code != http.StatusOK {
+		t.Fatalf("expected spi submission 200, got %d: %s", submitResponse.Code, submitResponse.Body.String())
+	}
+	submitted := decodeBody(t, submitResponse.Body.Bytes())["data"].(map[string]any)
+	spiMessageID = submitted["spi_message_id"].(string)
+	if submitted["status"] != "approved" || spiMessageID == "" {
+		t.Fatalf("expected approved with spi id, got %+v", submitted)
 	}
 
 	settlePayload := `{"spi_message_id":"` + spiMessageID + `","status":"accepted","code":"ACSC"}`

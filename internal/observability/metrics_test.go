@@ -26,3 +26,16 @@ func TestMetricsWritePrometheus(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsBoundsLatencySamplesPerRoute(t *testing.T) {
+	metrics := NewMetrics()
+	for i := 0; i < maxLatencySamplesPerRoute+10; i++ {
+		metrics.ObserveRequest("POST", "/v1/pix/transfers", 201, time.Duration(i)*time.Millisecond)
+	}
+
+	var out strings.Builder
+	metrics.WritePrometheus(&out)
+	if !strings.Contains(out.String(), `pixrail_http_request_latency_seconds_count{method="POST",route="/v1/pix/transfers"} 1024`) {
+		t.Fatalf("expected bounded latency sample count, got:\n%s", out.String())
+	}
+}

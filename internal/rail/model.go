@@ -1,6 +1,8 @@
 package rail
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +12,7 @@ import (
 type TransferStatus string
 
 const (
+	StatusAccepted TransferStatus = "accepted"
 	StatusApproved TransferStatus = "approved"
 	StatusBlocked  TransferStatus = "blocked"
 	StatusReview   TransferStatus = "review"
@@ -45,6 +48,7 @@ type Transfer struct {
 	TenantID        string
 	AccountID       string
 	IdempotencyKey  string
+	RequestHash     string
 	CorrelationID   string
 	EndToEndID      string
 	AmountCents     int64
@@ -102,8 +106,25 @@ type SettlementCallback struct {
 	SPIMessageID  string
 	Status        SettlementStatus
 	Code          string
+	CallbackHash  string
 	CorrelationID string
 	ReceivedAt    time.Time
+}
+
+type ReviewDecision string
+
+const (
+	ReviewApprove ReviewDecision = "approve"
+	ReviewBlock   ReviewDecision = "block"
+)
+
+type ReviewDecisionRequest struct {
+	TenantID      string
+	TransferID    string
+	Decision      ReviewDecision
+	Reason        string
+	CorrelationID string
+	ReviewedAt    time.Time
 }
 
 var (
@@ -152,6 +173,38 @@ func (r CreateTransferRequest) Validate() error {
 	return nil
 }
 
+func (r CreateTransferRequest) Fingerprint() string {
+	currency := strings.TrimSpace(r.Currency)
+	if currency == "" {
+		currency = "BRL"
+	}
+	parts := []string{
+		strings.TrimSpace(r.TenantID),
+		strings.TrimSpace(r.AccountID),
+		fmt.Sprintf("%d", r.AmountCents),
+		currency,
+		strings.TrimSpace(r.ReceiverKey),
+		string(r.ReceiverKeyType),
+		strings.TrimSpace(r.Description),
+	}
+	return hashParts(parts...)
+}
+
+func (c SettlementCallback) Fingerprint() string {
+	return hashParts(
+		strings.TrimSpace(c.TenantID),
+		strings.TrimSpace(c.TransferID),
+		strings.TrimSpace(c.SPIMessageID),
+		string(c.Status),
+		strings.TrimSpace(c.Code),
+	)
+}
+
 func (s TransferStatus) Terminal() bool {
 	return s == StatusBlocked || s == StatusSettled || s == StatusRejected
+}
+
+func hashParts(parts ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:])
 }

@@ -29,7 +29,7 @@
 | Threat | Control |
 | --- | --- |
 | DICT abuse | tenant, account, and key-lookup rate limits |
-| SPI duplicate callback | unique SPI message IDs and processed-event dedupe |
+| SPI duplicate callback | unique SPI message IDs plus processed callback hash dedupe |
 | Fraud bypass | decision log with score, rules, DICT result, and correlation ID |
 | Hot path overload | bounded workers, backpressure, and rate limits |
 | Out-of-order status | account partitioning and state transition guards |
@@ -40,9 +40,11 @@
 - API key authentication rejects unauthenticated requests.
 - Tenant isolation returns `404` for cross-tenant transfer reads.
 - Idempotency returns the original transfer without duplicating outbox records.
+- Idempotency rejects the same key with a different request fingerprint.
 - Rate-limit exhaustion returns `429`.
 - High-risk DICT signals block before SPI message creation.
-- Terminal settlement callback replay does not duplicate transitions.
+- Transfer creation persists accepted state before SPI submission.
+- Terminal settlement callback replay requires the same callback hash.
 
 ## Secret management
 

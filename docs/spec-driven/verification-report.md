@@ -4,29 +4,25 @@
 
 PixRail was updated against `specs/general-project-spec.md`, `specs/senior-engineering-rubric.md`, and `specs/spec-driven-senior-quality.md`.
 
-The repository now has the required spec-driven documents, product and domain evidence, engineering case study, scalability and operational-cost analysis, expanded architecture views, PostgreSQL migration/runtime path, dependency-backed readiness, outbox relay/retry behavior, configurable trace exporting, k6 load evidence, and updated repository conformance tests.
+The repository now has the required spec-driven documents, product and domain evidence, engineering case study, scalability and operational-cost analysis, expanded architecture views, PostgreSQL migration/runtime path, dependency-backed readiness, outbox relay/retry behavior, side-effect-safe SPI submission, request-fingerprint idempotency, callback-hash settlement replay, executable review resolution, configurable trace exporting, k6 evidence, and updated repository conformance tests.
 
 ## Commands Run
 
 | Command | Result | Evidence |
 | --- | --- | --- |
 | `go test ./...` | Passed | All packages green, including `internal/postgres`, `internal/messaging`, `internal/observability`, and `internal/spec`. |
-| `go test -race ./...` | Passed | Race-enabled suite passed across API, config, messaging, postgres, store, switcher, and spec packages. |
-| `go vet ./... && go build ./cmd/...` | Passed | No vet findings; API and migration commands build. |
-| `npx --yes @redocly/cli lint openapi.yaml` | Passed | OpenAPI validated in 20 ms with no warnings. |
+| `go test -race -coverprofile=/tmp/pixrail-coverage.out ./...` | Passed | Race-enabled suite passed; total statement coverage `53.0%`. |
+| `go vet ./...` | Passed | No vet findings. |
+| `npx --yes @redocly/cli lint openapi.yaml` | Passed | OpenAPI validated in 18 ms with no warnings. |
 | `go run golang.org/x/vuln/cmd/govulncheck@latest ./...` | Passed | `No vulnerabilities found.` |
-| `go test -bench=. -benchmem ./internal/api` | Passed | `BenchmarkCreateTransfer-10 47500 27647 ns/op 28347 B/op 230 allocs/op`. |
-| `go test -run TestCreateTransferLatencyBudget -v ./internal/api` | Passed | p50 `19.5us`, p95 `25.125us`, p99 `53us`, throughput `38751 rps`, error rate `0.00%`. |
-| `go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out` | Passed | Total statement coverage `58.2%`; core packages have focused unit coverage, PostgreSQL live behavior is verified separately through the integration test. |
+| `go test -bench=. -benchmem ./internal/api` | Passed | `BenchmarkCreateTransfer-10 48933 31595 ns/op 27823 B/op 221 allocs/op`. |
+| `go test -run TestCreateTransferLatencyBudget -v ./internal/api` | Passed | p50 `17.459us`, p95 `25.833us`, p99 `52.375us`, throughput `40658 rps`, error rate `0.00%`. |
 | `docker build -t pixrail-api:local .` | Passed | Multi-stage API image built successfully. |
 | `docker compose -f compose.yaml up -d --build` | Passed | PostgreSQL 17 healthy on host `15432`, API up on `18080`, Prometheus up on `19090`, migration container completed. |
-| `curl http://127.0.0.1:18080/readyz` | Passed | Store-backed readiness returned `HTTP 200` with `{"dependency":"store","status":"ready"}` after k6 load. |
-| PostgreSQL HTTP smoke | Passed | `POST /v1/pix/transfers` returned `201`; authenticated `/v1/outbox` returned payment-rail events for `tenant_demo`. |
-| `PIXRAIL_POSTGRES_TEST_DSN=postgres://pixrail:pixrail@127.0.0.1:15432/pixrail?sslmode=disable go test ./internal/postgres -run Integration -v` | Passed | Live PostgreSQL migration/store integration passed. |
-| `BASE_URL=http://127.0.0.1:18080 PIXRAIL_API_KEY=dev-secret k6 run benchmarks/k6/smoke.js` | Passed | 5/5 checks, 0% failures, p95 `20.74 ms`. |
-| `BASE_URL=http://127.0.0.1:18080 PIXRAIL_API_KEY=dev-secret k6 run benchmarks/k6/load.js` | Passed | 8,666/8,666 checks, 0% failures, p95 `13.95 ms`, p99 `24.96 ms`. |
-| `BASE_URL=http://127.0.0.1:18080 PIXRAIL_API_KEY=dev-secret k6 run benchmarks/k6/stress.js` | Passed | 60,530/60,530 checks, 0% failures, p99 `26.55 ms`. |
-| `BASE_URL=http://127.0.0.1:18080 PIXRAIL_API_KEY=dev-secret k6 run benchmarks/k6/spike.js` | Passed | 576,597/576,597 checks, 0% failures, p99 `17.47 ms`. |
+| `curl -i http://127.0.0.1:18080/readyz` | Passed | Store-backed readiness returned `HTTP 200` with `{"dependency":"store","status":"ready"}`. |
+| PostgreSQL HTTP smoke | Passed | `POST /v1/pix/transfers` returned `accepted` with empty SPI IDs; `POST /spi-submissions` returned `approved` with SPI ID; settlement callback returned `settled`; wrong SPI callback returned `409`. |
+| `PIXRAIL_POSTGRES_TEST_DSN=postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable go test -count=1 -run TestPostgresStoreIntegration -v ./internal/postgres` | Passed | Live PostgreSQL migration/store integration passed, including pending SPI, SPI submission, settlement, and callback-hash replay. |
+| `BASE_URL=http://127.0.0.1:18080 PIXRAIL_API_KEY=dev-secret k6 run benchmarks/k6/smoke.js` | Passed | 5/5 checks, 0% failures, p95 `7.39 ms`. |
 
 ## Passing Criteria
 
@@ -36,17 +32,22 @@ The repository now has the required spec-driven documents, product and domain ev
 - Domain docs cover glossary, bounded contexts, aggregates, invariants, and state machines.
 - Architecture docs include overview, C4 context, C4 container, module boundaries, sequence diagrams, deployment view, and ADRs.
 - PostgreSQL migration exists with unique idempotency, event, and SPI constraints.
+- Request fingerprint is stored and mismatched idempotency replay returns conflict.
+- Create persists `accepted` state before SPI submission; SPI identifiers are recorded through explicit post-persist operation.
+- Review state has an executable approve/block path.
+- Terminal settlement replay is guarded by callback hash and SPI message ID.
 - Production config rejects memory storage and requires PostgreSQL DSN.
 - Readiness checks store health.
 - Outbox relay publishes, marks acknowledgements, and schedules retries with error evidence.
 - Security docs cover threat model, authorization matrix, data classification, secrets, and abuse cases.
 - Benchmarks include measured p50, p95, p99, throughput, error rate, memory, and allocation evidence.
 - Docker and Compose were validated locally with a live PostgreSQL path.
-- k6 smoke, load, stress, and spike were validated against the Compose PostgreSQL runtime.
+- k6 smoke was validated against the Compose PostgreSQL runtime after the consistency changes. Prior load/stress/spike artifacts remain historical benchmark evidence and should be rerun before a release tag.
 
 ## Partial Criteria
 
 - Broker-backed publisher is still an adapter milestone; relay semantics are implemented with an interface and in-memory publisher.
+- Redis-backed distributed rate limiting is still a scale-out milestone; the current limiter is bounded to one process.
 
 ## Failed or Blocked Criteria
 
@@ -57,4 +58,4 @@ The repository now has the required spec-driven documents, product and domain ev
 - Add broker-backed publisher integration and DLQ replay tooling.
 - Add Redis-backed distributed rate limiting before horizontal API scaling.
 - Add signed SPI callback verification before external provider integration.
-- Promote the Compose PostgreSQL integration test to CI through Testcontainers or a service container.
+- Add long-running worker process around `SubmitPendingSPI` when moving beyond local/API-triggered simulation.

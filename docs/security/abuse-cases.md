@@ -36,7 +36,7 @@ An attacker sends a fake SPI callback.
 
 Controls:
 
-- current local MVP requires tenant API key and SPI message ID match
+- current local MVP requires tenant API key, SPI message ID match, and callback hash replay match
 - production must add signed callback verification
 
 ## Outbox replay abuse

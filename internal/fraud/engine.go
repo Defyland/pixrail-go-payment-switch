@@ -35,7 +35,7 @@ func (RulesEngine) Score(_ context.Context, transfer rail.CreateTransferRequest,
 
 	decision := rail.FraudDecision{
 		Score:  score,
-		Status: rail.StatusApproved,
+		Status: rail.StatusAccepted,
 		Rules:  rules,
 		Reason: "risk within payment-rail policy",
 	}

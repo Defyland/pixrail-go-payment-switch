@@ -17,11 +17,14 @@ sequenceDiagram
   D-->>S: receiver and risk signal
   S->>F: score transfer
   F-->>S: approve, review, or block
-  alt approved
-    S->>P: create SPI message
-    P-->>S: message ID and end-to-end ID
-  end
-  S->>O: append events with transfer state
-  S-->>A: transfer response
+  S->>O: persist transfer, audit, and outbox events
+  S-->>A: accepted/review/blocked response
   A-->>C: 201 or idempotent 200
+  opt accepted transfer after durable write
+    A->>S: POST /v1/pix/transfers/{id}/spi-submissions
+    S->>P: submit idempotent SPI message
+    P-->>S: message ID and end-to-end ID
+    S->>O: persist SPI identifiers and approval events
+    S-->>A: approved transfer response
+  end
 ```

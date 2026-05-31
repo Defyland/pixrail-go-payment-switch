@@ -11,6 +11,10 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - readiness tied to dependency health
 - outbox relay/retry semantics
 - PostgreSQL migration evidence
+- post-persist SPI submission semantics
+- request-fingerprint idempotency
+- callback-hash settlement dedupe
+- executable manual review resolution
 - verification report with command output
 
 ## Files to Create or Update
@@ -27,8 +31,14 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - `docs/architecture/*.md`
 - `README.md`
 - `db/migrations/0001_pixrail_core.sql`
+- `openapi.yaml`
 - `internal/api/server.go`
 - `internal/api/server_test.go`
+- `internal/rail/model.go`
+- `internal/fraud/engine.go`
+- `internal/switcher/service.go`
+- `internal/switcher/service_test.go`
+- `internal/postgres/store.go`
 - `internal/store/memory.go`
 - `internal/store/memory_test.go`
 - `internal/messaging/relay.go`
@@ -44,6 +54,10 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 | Domain model evidence is explicit | Add glossary, bounded contexts, aggregates, invariants, and state machine docs. |
 | Case study answers rubric | Add `docs/engineering-case-study.md` with the required table of contents. |
 | Data consistency is production-aware | Add PostgreSQL migration and update database design docs. |
+| Create is side-effect safe | Persist `accepted` transfer state before SPI submission; record SPI later through an explicit operation. |
+| Idempotency is payload-aware | Store request fingerprint and return `409` on mismatched reuse. |
+| Review state is operational | Add review decision operation that approves into SPI-pending state or blocks. |
+| Callback replay is strict | Store callback hash and reject conflicting terminal callbacks. |
 | Readiness is not fake | Add store health interface and readiness failure tests. |
 | Outbox is operationally credible | Add relay with publisher ack, failure retry, and tests. |
 | Security docs cover abuse and secrets | Add data classification, secrets, and abuse case docs. |
@@ -55,6 +69,7 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 ```sh
 go test ./...
 go test -race ./...
+PIXRAIL_POSTGRES_TEST_DSN=postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable go test -count=1 -run TestPostgresStoreIntegration -v ./internal/postgres
 go vet ./...
 npx --yes @redocly/cli lint openapi.yaml
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
@@ -66,13 +81,12 @@ docker build -t pixrail-api:local .
 ## Risks
 
 - Local Docker daemon may be unavailable; if so, Docker build is documented as locally blocked and covered by CI.
-- PostgreSQL migration can be validated syntactically and by review without a local database unless a database is available.
+- PostgreSQL integration is repeatable through the CI service container and local Compose DSN.
 - In-memory adapter remains the local default; production must use durable storage in a real deployment.
 
 ## Deferred Work
 
-- Always-on PostgreSQL integration tests using Testcontainers or Compose.
 - Broker-backed outbox publisher.
 - Redis-backed distributed rate limiter.
 - Real DICT/SPI provider adapters.
-- Signed provider callbacks.
+- Signed provider callbacks beyond local SPI message and callback-hash validation.

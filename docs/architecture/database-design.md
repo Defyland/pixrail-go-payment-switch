@@ -10,6 +10,7 @@ create table pix_transfers (
   tenant_id text not null,
   account_id text not null,
   idempotency_key text not null,
+  request_hash text not null,
   correlation_id text not null,
   end_to_end_id text unique,
   amount_cents bigint not null check (amount_cents > 0),
@@ -32,6 +33,10 @@ create table pix_transfers (
 
 create index pix_transfers_tenant_account_created_idx
   on pix_transfers (tenant_id, account_id, created_at desc);
+
+create index pix_transfers_pending_spi_idx
+  on pix_transfers (created_at asc)
+  where status = 'accepted' and spi_message_id is null;
 
 create table payment_outbox (
   sequence bigserial primary key,
@@ -79,13 +84,15 @@ create table processed_spi_callbacks (
 ## Transaction boundaries
 
 - Create transfer: insert transfer, audit record, and all outbox events in one transaction.
+- SPI submission: load an already accepted transfer, submit through the idempotent SPI port, then persist SPI identifiers and approval events in one transaction.
+- Manual review: lock and transition a `review` transfer to `accepted` or `blocked`, with audit and outbox evidence.
 - Settlement callback: lock transfer by tenant and ID, validate SPI message ID, guard terminal states, update transfer, insert audit record, and insert settlement event.
 - Outbox relay: publish pending events, then mark `published = true` and `dispatched_at` after publisher acknowledgement. Failures increment attempts, retain `last_error`, and move `available_at` forward.
 - Migration runner: `go run ./cmd/pixrail-migrate` applies the core schema against `PIXRAIL_DATABASE_URL`.
 
 ## Isolation and rollback
 
-Default `READ COMMITTED` is acceptable with unique constraints and row-level locks on settlement updates. Failed DICT or fraud calls happen before the transaction, so no partial transfer row is written. Failed outbox insert rolls back the transfer decision.
+Default `READ COMMITTED` is acceptable with unique constraints and row-level locks on SPI submission, review, and settlement updates. Failed DICT or fraud calls happen before the transaction, so no partial transfer row is written. Create never calls SPI; failed outbox insert rolls back the transfer decision. Settlement callback replay is guarded by `processed_spi_callbacks.callback_hash` so a different terminal callback payload is a conflict.
 
 ## Runtime guardrails
 

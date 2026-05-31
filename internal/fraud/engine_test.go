@@ -25,7 +25,7 @@ func TestRulesEngineApprovesLowRiskTransfer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("score failed: %v", err)
 	}
-	if decision.Status != rail.StatusApproved {
-		t.Fatalf("expected approved, got %s", decision.Status)
+	if decision.Status != rail.StatusAccepted {
+		t.Fatalf("expected accepted, got %s", decision.Status)
 	}
 }

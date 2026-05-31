@@ -14,8 +14,10 @@ func TestMigrationDocumentsProductionConstraints(t *testing.T) {
 	sql := strings.ToLower(string(raw))
 	required := []string{
 		"create table if not exists pix_transfers",
+		"request_hash text not null",
 		"unique (tenant_id, idempotency_key)",
 		"spi_message_id text unique",
+		"pix_transfers_pending_spi_idx",
 		"create table if not exists payment_outbox",
 		"event_id text not null unique",
 		"payment_outbox_pending_idx",

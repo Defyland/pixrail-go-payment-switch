@@ -3,6 +3,7 @@ create table if not exists pix_transfers (
   tenant_id text not null,
   account_id text not null,
   idempotency_key text not null,
+  request_hash text not null,
   correlation_id text not null,
   end_to_end_id text unique,
   amount_cents bigint not null check (amount_cents > 0),
@@ -14,7 +15,7 @@ create table if not exists pix_transfers (
   receiver_risk integer not null,
   fraud_score integer not null,
   fraud_rules jsonb not null default '[]'::jsonb,
-  status text not null check (status in ('approved', 'blocked', 'review', 'settled', 'rejected')),
+  status text not null check (status in ('accepted', 'approved', 'blocked', 'review', 'settled', 'rejected')),
   decision_reason text not null,
   spi_message_id text unique,
   settlement_code text not null default '',
@@ -25,6 +26,10 @@ create table if not exists pix_transfers (
 
 create index if not exists pix_transfers_tenant_account_created_idx
   on pix_transfers (tenant_id, account_id, created_at desc);
+
+create index if not exists pix_transfers_pending_spi_idx
+  on pix_transfers (created_at asc)
+  where status = 'accepted' and spi_message_id is null;
 
 create table if not exists payment_outbox (
   sequence bigserial primary key,

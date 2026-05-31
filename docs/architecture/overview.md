@@ -20,4 +20,4 @@ PixRail owns payment-rail evidence. It does not own balances, ledger postings, s
 
 ## Deferred complexity
 
-The service is a modular monolith before microservices because transfer state, audit, and outbox writes need a clear transaction boundary. PostgreSQL, Redis, and broker adapters are explicit next steps, but their absence does not weaken the domain boundary.
+The service is a modular monolith before microservices because transfer state, audit, and outbox writes need a clear transaction boundary. PostgreSQL is implemented for durable state; Redis-backed rate limits and broker-backed publishing remain explicit next steps, but their absence does not weaken the domain boundary.

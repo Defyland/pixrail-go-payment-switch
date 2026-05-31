@@ -83,7 +83,53 @@ func (s *Store) GetTransfer(ctx context.Context, tenantID, transferID string) (r
 	return transfer, err
 }
 
-func (s *Store) UpdateSettlement(ctx context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, error) {
+func (s *Store) RecordSPISubmission(ctx context.Context, tenantID string, transferID string, message rail.SPIMessage, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return rail.Transfer{}, false, err
+	}
+	defer rollback(ctx, tx)
+
+	row := tx.QueryRow(ctx, transferSelectSQL()+` where tenant_id = $1 and id = $2 for update`, tenantID, transferID)
+	transfer, err := scanTransfer(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return rail.Transfer{}, false, rail.ErrNotFound
+	}
+	if err != nil {
+		return rail.Transfer{}, false, err
+	}
+	if transfer.Status == rail.StatusApproved && transfer.SPIMessageID == message.MessageID {
+		return transfer, true, tx.Commit(ctx)
+	}
+	if transfer.Status != rail.StatusAccepted {
+		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not pending SPI submission", rail.ErrConflict)
+	}
+	if message.MessageID == "" || message.EndToEndID == "" {
+		return rail.Transfer{}, false, fmt.Errorf("%w: spi identifiers are required", rail.ErrValidation)
+	}
+	transfer.Status = rail.StatusApproved
+	transfer.SPIMessageID = message.MessageID
+	transfer.EndToEndID = message.EndToEndID
+	transfer.UpdatedAt = message.SubmittedAt.UTC()
+	if _, err := tx.Exec(ctx, `
+		update pix_transfers
+		   set status = $1, spi_message_id = $2, end_to_end_id = $3, updated_at = $4
+		 where tenant_id = $5 and id = $6`,
+		transfer.Status, transfer.SPIMessageID, transfer.EndToEndID, transfer.UpdatedAt, tenantID, transferID); err != nil {
+		return rail.Transfer{}, false, translatePgError(err)
+	}
+	for _, event := range outbox {
+		if err := insertOutbox(ctx, tx, event); err != nil {
+			return rail.Transfer{}, false, translatePgError(err)
+		}
+	}
+	if err := insertAudit(ctx, tx, audit); err != nil {
+		return rail.Transfer{}, false, translatePgError(err)
+	}
+	return transfer, false, tx.Commit(ctx)
+}
+
+func (s *Store) RecordReviewDecision(ctx context.Context, tenantID string, transferID string, status rail.TransferStatus, reason string, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return rail.Transfer{}, err
@@ -98,27 +144,24 @@ func (s *Store) UpdateSettlement(ctx context.Context, tenantID string, transferI
 	if err != nil {
 		return rail.Transfer{}, err
 	}
-	if transfer.SPIMessageID == "" || transfer.SPIMessageID != callback.SPIMessageID {
-		return rail.Transfer{}, fmt.Errorf("%w: spi_message_id mismatch", rail.ErrConflict)
+	if transfer.Status != rail.StatusReview {
+		return rail.Transfer{}, fmt.Errorf("%w: transfer is not waiting for review", rail.ErrConflict)
 	}
-	if transfer.Status.Terminal() {
-		return transfer, tx.Commit(ctx)
-	}
-	switch callback.Status {
-	case rail.SettlementAccepted:
-		transfer.Status = rail.StatusSettled
-	case rail.SettlementRejected:
-		transfer.Status = rail.StatusRejected
+	switch status {
+	case rail.StatusAccepted, rail.StatusBlocked:
 	default:
-		return rail.Transfer{}, fmt.Errorf("%w: unsupported settlement status", rail.ErrValidation)
+		return rail.Transfer{}, fmt.Errorf("%w: review can only accept or block", rail.ErrValidation)
 	}
-	transfer.SettlementCode = callback.Code
-	transfer.UpdatedAt = callback.ReceivedAt.UTC()
+	transfer.Status = status
+	if reason != "" {
+		transfer.DecisionReason = reason
+	}
+	transfer.UpdatedAt = audit.CreatedAt.UTC()
 	if _, err := tx.Exec(ctx, `
 		update pix_transfers
-		   set status = $1, settlement_code = $2, updated_at = $3
+		   set status = $1, decision_reason = $2, updated_at = $3
 		 where tenant_id = $4 and id = $5`,
-		transfer.Status, transfer.SettlementCode, transfer.UpdatedAt, tenantID, transferID); err != nil {
+		transfer.Status, transfer.DecisionReason, transfer.UpdatedAt, tenantID, transferID); err != nil {
 		return rail.Transfer{}, translatePgError(err)
 	}
 	for _, event := range outbox {
@@ -130,6 +173,83 @@ func (s *Store) UpdateSettlement(ctx context.Context, tenantID string, transferI
 		return rail.Transfer{}, translatePgError(err)
 	}
 	return transfer, tx.Commit(ctx)
+}
+
+func (s *Store) UpdateSettlement(ctx context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return rail.Transfer{}, false, err
+	}
+	defer rollback(ctx, tx)
+
+	row := tx.QueryRow(ctx, transferSelectSQL()+` where tenant_id = $1 and id = $2 for update`, tenantID, transferID)
+	transfer, err := scanTransfer(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return rail.Transfer{}, false, rail.ErrNotFound
+	}
+	if err != nil {
+		return rail.Transfer{}, false, err
+	}
+	if transfer.SPIMessageID == "" || transfer.SPIMessageID != callback.SPIMessageID {
+		return rail.Transfer{}, false, fmt.Errorf("%w: spi_message_id mismatch", rail.ErrConflict)
+	}
+	callbackHash := callback.CallbackHash
+	if callbackHash == "" {
+		callbackHash = callback.Fingerprint()
+	}
+	var existingHash string
+	err = tx.QueryRow(ctx, `
+		select callback_hash
+		  from processed_spi_callbacks
+		 where tenant_id = $1 and spi_message_id = $2`,
+		tenantID, callback.SPIMessageID).Scan(&existingHash)
+	if err == nil {
+		if existingHash == callbackHash {
+			return transfer, true, tx.Commit(ctx)
+		}
+		return rail.Transfer{}, false, fmt.Errorf("%w: conflicting settlement callback for terminal transfer", rail.ErrConflict)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return rail.Transfer{}, false, err
+	}
+	if transfer.Status.Terminal() {
+		return rail.Transfer{}, false, fmt.Errorf("%w: terminal transfer has no matching callback hash", rail.ErrConflict)
+	}
+	if transfer.Status != rail.StatusApproved {
+		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not approved for settlement callback", rail.ErrConflict)
+	}
+	switch callback.Status {
+	case rail.SettlementAccepted:
+		transfer.Status = rail.StatusSettled
+	case rail.SettlementRejected:
+		transfer.Status = rail.StatusRejected
+	default:
+		return rail.Transfer{}, false, fmt.Errorf("%w: unsupported settlement status", rail.ErrValidation)
+	}
+	transfer.SettlementCode = callback.Code
+	transfer.UpdatedAt = callback.ReceivedAt.UTC()
+	if _, err := tx.Exec(ctx, `
+		update pix_transfers
+		   set status = $1, settlement_code = $2, updated_at = $3
+		 where tenant_id = $4 and id = $5`,
+		transfer.Status, transfer.SettlementCode, transfer.UpdatedAt, tenantID, transferID); err != nil {
+		return rail.Transfer{}, false, translatePgError(err)
+	}
+	for _, event := range outbox {
+		if err := insertOutbox(ctx, tx, event); err != nil {
+			return rail.Transfer{}, false, translatePgError(err)
+		}
+	}
+	if err := insertAudit(ctx, tx, audit); err != nil {
+		return rail.Transfer{}, false, translatePgError(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into processed_spi_callbacks (tenant_id, spi_message_id, callback_hash, processed_at)
+		values ($1, $2, $3, $4)`,
+		tenantID, callback.SPIMessageID, callbackHash, callback.ReceivedAt.UTC()); err != nil {
+		return rail.Transfer{}, false, translatePgError(err)
+	}
+	return transfer, false, tx.Commit(ctx)
 }
 
 func (s *Store) Outbox(ctx context.Context) ([]events.OutboxRecord, error) {
@@ -189,6 +309,30 @@ func (s *Store) PendingOutbox(ctx context.Context, limit int) ([]events.OutboxRe
 	return records, rows.Err()
 }
 
+func (s *Store) PendingSPISubmissions(ctx context.Context, limit int) ([]rail.Transfer, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, transferSelectSQL()+`
+		where status = $1 and coalesce(spi_message_id, '') = ''
+		order by created_at asc
+		limit $2`, rail.StatusAccepted, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var transfers []rail.Transfer
+	for rows.Next() {
+		transfer, err := scanTransfer(rows)
+		if err != nil {
+			return nil, err
+		}
+		transfers = append(transfers, transfer)
+	}
+	return transfers, rows.Err()
+}
+
 func (s *Store) MarkOutboxPublished(ctx context.Context, sequence int64, dispatchedAt time.Time) error {
 	tag, err := s.pool.Exec(ctx, `
 		update payment_outbox
@@ -229,6 +373,7 @@ func scanTransfer(row transferScanner) (rail.Transfer, error) {
 		&transfer.TenantID,
 		&transfer.AccountID,
 		&transfer.IdempotencyKey,
+		&transfer.RequestHash,
 		&transfer.CorrelationID,
 		&transfer.EndToEndID,
 		&transfer.AmountCents,
@@ -258,7 +403,7 @@ func scanTransfer(row transferScanner) (rail.Transfer, error) {
 
 func transferSelectSQL() string {
 	return `
-		select id, tenant_id, account_id, idempotency_key, correlation_id, coalesce(end_to_end_id, ''),
+		select id, tenant_id, account_id, idempotency_key, request_hash, correlation_id, coalesce(end_to_end_id, ''),
 		       amount_cents, currency, receiver_key, receiver_key_type, receiver_name, receiver_bank,
 		       receiver_risk, fraud_score, fraud_rules, status, decision_reason, coalesce(spi_message_id, ''),
 		       settlement_code, created_at, updated_at
@@ -272,17 +417,17 @@ func insertTransfer(ctx context.Context, tx pgx.Tx, transfer rail.Transfer) erro
 	}
 	_, err = tx.Exec(ctx, `
 		insert into pix_transfers (
-			id, tenant_id, account_id, idempotency_key, correlation_id, end_to_end_id,
+			id, tenant_id, account_id, idempotency_key, request_hash, correlation_id, end_to_end_id,
 			amount_cents, currency, receiver_key, receiver_key_type, receiver_name, receiver_bank,
 			receiver_risk, fraud_score, fraud_rules, status, decision_reason, spi_message_id,
 			settlement_code, created_at, updated_at
 		) values (
-			$1, $2, $3, $4, $5, nullif($6, ''),
-			$7, $8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, nullif($18, ''),
-			$19, $20, $21
+			$1, $2, $3, $4, $5, $6, nullif($7, ''),
+			$8, $9, $10, $11, $12, $13,
+			$14, $15, $16, $17, $18, nullif($19, ''),
+			$20, $21, $22
 		)`,
-		transfer.ID, transfer.TenantID, transfer.AccountID, transfer.IdempotencyKey, transfer.CorrelationID, transfer.EndToEndID,
+		transfer.ID, transfer.TenantID, transfer.AccountID, transfer.IdempotencyKey, transfer.RequestHash, transfer.CorrelationID, transfer.EndToEndID,
 		transfer.AmountCents, transfer.Currency, transfer.ReceiverKey, transfer.ReceiverKeyType, transfer.ReceiverName, transfer.ReceiverBank,
 		transfer.ReceiverRisk, transfer.FraudScore, fraudRules, transfer.Status, transfer.DecisionReason, transfer.SPIMessageID,
 		transfer.SettlementCode, transfer.CreatedAt.UTC(), transfer.UpdatedAt.UTC(),

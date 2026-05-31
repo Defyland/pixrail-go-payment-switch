@@ -44,8 +44,8 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		TenantID:        "tenant_integration",
 		AccountID:       "acct_integration",
 		IdempotencyKey:  "idem_" + now.Format("150405000000000"),
+		RequestHash:     "request_hash_" + now.Format("150405000000000"),
 		CorrelationID:   "corr_integration",
-		EndToEndID:      "E" + now.Format("20060102150405"),
 		AmountCents:     12345,
 		Currency:        "BRL",
 		ReceiverKey:     "receiver@example.com",
@@ -55,13 +55,12 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		ReceiverRisk:    10,
 		FraudScore:      10,
 		FraudRules:      []string{},
-		Status:          rail.StatusApproved,
+		Status:          rail.StatusAccepted,
 		DecisionReason:  "ok",
-		SPIMessageID:    "spi_" + now.Format("150405000000000"),
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
-	event, err := events.New("evt_"+now.Format("150405000000000"), "pix_transfer_approved", transfer.TenantID, transfer.AccountID, transfer.ID, transfer.CorrelationID, now, map[string]string{"status": "approved"})
+	event, err := events.New("evt_"+now.Format("150405000000000"), "pix_transfer_accepted", transfer.TenantID, transfer.AccountID, transfer.ID, transfer.CorrelationID, now, map[string]string{"status": "accepted"})
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -77,12 +76,12 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("insert transfer: %v", err)
 	}
-	replay, ok, err := store.FindByIdempotency(ctx, transfer.TenantID, transfer.IdempotencyKey)
+	idempotentTransfer, ok, err := store.FindByIdempotency(ctx, transfer.TenantID, transfer.IdempotencyKey)
 	if err != nil {
 		t.Fatalf("find idempotency: %v", err)
 	}
-	if !ok || replay.ID != transfer.ID {
-		t.Fatalf("expected replay transfer, got ok=%v transfer=%+v", ok, replay)
+	if !ok || idempotentTransfer.ID != transfer.ID {
+		t.Fatalf("expected replay transfer, got ok=%v transfer=%+v", ok, idempotentTransfer)
 	}
 	pending, err := store.PendingOutbox(ctx, 10)
 	if err != nil {
@@ -90,5 +89,74 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	}
 	if len(pending) == 0 {
 		t.Fatal("expected pending outbox event")
+	}
+	pendingSPI, err := store.PendingSPISubmissions(ctx, 10)
+	if err != nil {
+		t.Fatalf("pending spi: %v", err)
+	}
+	if len(pendingSPI) == 0 {
+		t.Fatal("expected pending spi submission")
+	}
+
+	message := rail.SPIMessage{
+		MessageID:   "spi_" + now.Format("150405000000000"),
+		EndToEndID:  "E" + now.Format("20060102150405"),
+		TransferID:  transfer.ID,
+		SubmittedAt: now.Add(time.Second),
+	}
+	spiEvent, err := events.New("evt_spi_"+now.Format("150405000000000"), "spi_message_created", transfer.TenantID, transfer.AccountID, transfer.ID, transfer.CorrelationID, now, map[string]string{"spi_message_id": message.MessageID})
+	if err != nil {
+		t.Fatalf("spi event: %v", err)
+	}
+	approved, replay, err := store.RecordSPISubmission(ctx, transfer.TenantID, transfer.ID, message, []events.Event{spiEvent}, storepkg.AuditRecord{
+		TenantID:      transfer.TenantID,
+		AccountID:     transfer.AccountID,
+		TransferID:    transfer.ID,
+		Action:        "spi_submission_recorded",
+		CorrelationID: transfer.CorrelationID,
+		Metadata:      map[string]string{"spi_message_id": message.MessageID},
+		CreatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("record spi: %v", err)
+	}
+	if replay || approved.Status != rail.StatusApproved || approved.SPIMessageID != message.MessageID {
+		t.Fatalf("expected approved spi submission, replay=%v transfer=%+v", replay, approved)
+	}
+
+	callback := rail.SettlementCallback{
+		TenantID:     transfer.TenantID,
+		TransferID:   transfer.ID,
+		SPIMessageID: message.MessageID,
+		Status:       rail.SettlementAccepted,
+		Code:         "ACSC",
+		ReceivedAt:   now.Add(2 * time.Second),
+	}
+	callback.CallbackHash = callback.Fingerprint()
+	settlementEvent, err := events.New("evt_settlement_"+now.Format("150405000000000"), "pix_transfer_settled", transfer.TenantID, transfer.AccountID, transfer.ID, transfer.CorrelationID, now, map[string]string{"status": "settled"})
+	if err != nil {
+		t.Fatalf("settlement event: %v", err)
+	}
+	settled, replay, err := store.UpdateSettlement(ctx, transfer.TenantID, transfer.ID, callback, []events.Event{settlementEvent}, storepkg.AuditRecord{
+		TenantID:      transfer.TenantID,
+		AccountID:     transfer.AccountID,
+		TransferID:    transfer.ID,
+		Action:        "spi_settlement_callback_recorded",
+		CorrelationID: transfer.CorrelationID,
+		Metadata:      map[string]string{"status": "accepted"},
+		CreatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("settlement: %v", err)
+	}
+	if replay || settled.Status != rail.StatusSettled {
+		t.Fatalf("expected settled transfer, replay=%v transfer=%+v", replay, settled)
+	}
+	_, replay, err = store.UpdateSettlement(ctx, transfer.TenantID, transfer.ID, callback, nil, storepkg.AuditRecord{})
+	if err != nil {
+		t.Fatalf("settlement replay: %v", err)
+	}
+	if !replay {
+		t.Fatal("expected settlement callback hash replay")
 	}
 }

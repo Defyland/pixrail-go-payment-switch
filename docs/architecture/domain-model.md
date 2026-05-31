@@ -2,12 +2,13 @@
 
 ## Transfer
 
-Tenant-scoped payment intent with idempotency key, account ID, amount, receiver key, DICT evidence, fraud decision, SPI message identifiers, and settlement state.
+Tenant-scoped payment intent with idempotency key, request fingerprint, account ID, amount, receiver key, DICT evidence, fraud decision, SPI message identifiers, and settlement state.
 
 Statuses:
 
-- `approved`: fraud accepted and SPI message created
-- `review`: fraud score requires manual review; no SPI message
+- `accepted`: fraud accepted, request fingerprint stored, and SPI submission requested
+- `approved`: SPI message created for a durably accepted transfer
+- `review`: fraud score requires manual review before SPI submission
 - `blocked`: fraud policy blocked before SPI
 - `settled`: SPI callback accepted
 - `rejected`: SPI callback rejected
@@ -18,7 +19,7 @@ Resolved receiver identity: receiver ID, bank ISPB, account hash, risk signal, a
 
 ## FraudDecision
 
-Score, triggered rule IDs, decision status, and reason. Current rules include high amount, review amount, high-risk DICT signal, and self-transfer hash match.
+Score, triggered rule IDs, decision status, and reason. Current rules include high amount, review amount, high-risk DICT signal, and self-transfer hash match. Low-risk decisions create `accepted` transfers, not SPI side effects.
 
 ## Event
 

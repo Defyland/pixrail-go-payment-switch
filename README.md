@@ -24,8 +24,9 @@ Fintech teams often need to prove Pix transfer intake, DICT lookup behavior, fra
 - DICT-like receiver key resolution with timeout and not-found simulation
 - token-bucket rate limiting for tenant/account and DICT lookup pressure
 - rules-based antifraud decision log with approve, review, and block outcomes
-- SPI-style message creation for approved transfers
-- idempotent settlement callback handling
+- SPI-style message creation after the transfer is durably accepted
+- manual review resolution for review-threshold transfers
+- idempotent settlement callback handling with SPI message and callback-hash guards
 - CloudEvents-like outbox records for downstream systems
 - structured JSON logs, request ID, correlation ID, Prometheus metrics, and OpenTelemetry spans
 - health and readiness probes
@@ -58,7 +59,7 @@ The switch owns payment-rail state only. Settlement, ledger entries, balances, r
 
 ## Domain model
 
-- `Transfer`: tenant-scoped Pix transfer intent, fraud decision, SPI identifiers, and settlement status
+- `Transfer`: tenant-scoped Pix transfer intent, request fingerprint, fraud decision, SPI identifiers, and settlement status
 - `DictEntry`: resolved receiver identity, bank ISPB, account hash, and risk signal
 - `FraudDecision`: score, triggered rules, decision reason, and resulting status
 - `SPIMessage`: simulated payment-network message with end-to-end ID
@@ -75,7 +76,7 @@ Authentication accepts either `Authorization: Bearer <api-key>` or `X-API-Key: <
 
 ## Async or event architecture
 
-Every accepted transfer writes events to an outbox in the same logical transaction as the transfer state. Events use the envelope documented in [docs/events/README.md](docs/events/README.md) and include `event_id`, `event_type`, `schema_version`, `occurred_at`, `producer`, `tenant_id`, `account_id`, `pix_transfer_id`, and `correlation_id`.
+Every accepted transfer writes events to an outbox in the same logical transaction as the transfer state. Create does not call SPI before this durable write; it records `accepted` plus `spi_submission_requested`, then SPI submission records `approved` with SPI identifiers. Events use the envelope documented in [docs/events/README.md](docs/events/README.md) and include `event_id`, `event_type`, `schema_version`, `occurred_at`, `producer`, `tenant_id`, `account_id`, `pix_transfer_id`, and `correlation_id`.
 
 The messaging topology defines a payment rail exchange, routing key, consumer queue, retry queue, dead-letter exchange, dead-letter queue, idempotency header, and correlation header in code and documentation. The relay drains pending outbox records, publishes them through a publisher interface, marks acknowledgements, and schedules failed publishes for retry. Consumers must deduplicate by `event_id` and preserve account-level ordering.
 
@@ -83,7 +84,7 @@ The messaging topology defines a payment rail exchange, routing key, consumer qu
 
 The local default uses an in-memory repository so tests and simple demos have no external dependency. Production mode requires `PIXRAIL_STORE_DRIVER=postgres` and `PIXRAIL_DATABASE_URL`. The PostgreSQL migration lives in [db/migrations/0001_pixrail_core.sql](db/migrations/0001_pixrail_core.sql), the migration runner is [cmd/pixrail-migrate](cmd/pixrail-migrate), and the adapter is implemented under [internal/postgres](internal/postgres).
 
-Transaction boundary: transfer state, decision audit, and outbox inserts are committed together. Settlement callbacks are guarded by SPI message ID and terminal-state checks.
+Transaction boundary: transfer state, request fingerprint, decision audit, and outbox inserts are committed together. SPI submission happens only after a persisted accepted transfer exists. Settlement callbacks are guarded by SPI message ID, callback hash, and terminal-state checks.
 
 ## Testing strategy
 
@@ -92,7 +93,7 @@ The suite uses Go `testing` and `httptest`:
 - unit tests for validation, rate limiting, DICT simulation, fraud rules, and messaging topology
 - API/request tests for auth, validation, lifecycle, metrics, and rate-limit failure
 - store tests for idempotency and tenant isolation
-- service tests for approved, blocked, idempotent replay, and settlement flows
+- service tests for accepted, SPI-submitted, review, blocked, idempotent replay, and settlement flows
 - repository spec tests for required docs, OpenAPI, benchmark artifacts, and event schema envelope coverage
 - native benchmark for transfer creation hot path
 
@@ -140,6 +141,13 @@ curl -s -X POST http://localhost:8080/v1/pix/transfers \
   -H 'Idempotency-Key: demo-1' \
   -H 'Content-Type: application/json' \
   -d '{"account_id":"acct_123","amount_cents":12345,"currency":"BRL","receiver_key":"receiver@example.com","receiver_key_type":"EMAIL"}'
+```
+
+The create response is `accepted` and intentionally has no SPI identifiers yet. To simulate the post-persist SPI worker locally:
+
+```sh
+curl -s -X POST http://localhost:8080/v1/pix/transfers/{id}/spi-submissions \
+  -H 'Authorization: Bearer dev-secret'
 ```
 
 Compose is available for production-like process wiring:
@@ -191,7 +199,8 @@ PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:15432/pixrail?ss
 - DICT missing or timeout simulation returns dependency failure
 - high-risk receivers are blocked before SPI message creation
 - duplicate transfer requests replay the original response without new events
-- duplicate terminal SPI callbacks replay the terminal transfer state
+- duplicate transfer requests with a different payload return `409`
+- duplicate terminal SPI callbacks replay only when the callback hash matches
 - wrong tenant cannot read another tenant transfer
 
 ## Roadmap

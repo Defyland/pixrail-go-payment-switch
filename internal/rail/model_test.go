@@ -31,7 +31,39 @@ func TestTransferStatusTerminal(t *testing.T) {
 	if !StatusSettled.Terminal() || !StatusBlocked.Terminal() || !StatusRejected.Terminal() {
 		t.Fatal("expected settled, blocked, and rejected to be terminal")
 	}
-	if StatusApproved.Terminal() || StatusReview.Terminal() {
-		t.Fatal("approved and review are not terminal")
+	if StatusAccepted.Terminal() || StatusApproved.Terminal() || StatusReview.Terminal() {
+		t.Fatal("accepted, approved, and review are not terminal")
+	}
+}
+
+func TestCreateTransferRequestFingerprintChangesWhenPayloadChanges(t *testing.T) {
+	base := CreateTransferRequest{
+		TenantID:        "tenant_a",
+		AccountID:       "acct_1",
+		IdempotencyKey:  "idem",
+		AmountCents:     100,
+		Currency:        "BRL",
+		ReceiverKey:     "receiver@example.com",
+		ReceiverKeyType: KeyEmail,
+	}
+	changed := base
+	changed.AmountCents = 200
+	if base.Fingerprint() == changed.Fingerprint() {
+		t.Fatal("expected payload fingerprint to change when transfer payload changes")
+	}
+}
+
+func TestSettlementCallbackFingerprintChangesWhenPayloadChanges(t *testing.T) {
+	base := SettlementCallback{
+		TenantID:     "tenant_a",
+		TransferID:   "pxt_1",
+		SPIMessageID: "spi_1",
+		Status:       SettlementAccepted,
+		Code:         "ACSC",
+	}
+	changed := base
+	changed.Code = "RJCT"
+	if base.Fingerprint() == changed.Fingerprint() {
+		t.Fatal("expected callback fingerprint to change when callback payload changes")
 	}
 }

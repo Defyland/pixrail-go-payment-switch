@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const maxLatencySamplesPerRoute = 1024
+
 type Metrics struct {
 	mu        sync.Mutex
 	requests  map[string]int64
@@ -34,7 +36,12 @@ func (m *Metrics) ObserveRequest(method, route string, status int, elapsed time.
 	key := fmt.Sprintf(`method="%s",route="%s",status="%d"`, method, route, status)
 	m.requests[key]++
 	latencyKey := fmt.Sprintf(`method="%s",route="%s"`, method, route)
-	m.latency[latencyKey] = append(m.latency[latencyKey], elapsed.Seconds())
+	samples := append(m.latency[latencyKey], elapsed.Seconds())
+	if len(samples) > maxLatencySamplesPerRoute {
+		copy(samples, samples[len(samples)-maxLatencySamplesPerRoute:])
+		samples = samples[:maxLatencySamplesPerRoute]
+	}
+	m.latency[latencyKey] = samples
 }
 
 func (m *Metrics) ObserveDecision(status string) {

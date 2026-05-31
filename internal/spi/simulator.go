@@ -17,10 +17,14 @@ type Simulator struct{}
 
 func (Simulator) Submit(_ context.Context, transfer rail.Transfer) (rail.SPIMessage, error) {
 	sum := sha256.Sum256([]byte(transfer.ID + ":" + transfer.AccountID + ":" + transfer.ReceiverKey))
+	submittedAt := transfer.CreatedAt.UTC()
+	if submittedAt.IsZero() {
+		submittedAt = time.Now().UTC()
+	}
 	return rail.SPIMessage{
 		MessageID:   "spi_" + hex.EncodeToString(sum[:8]),
-		EndToEndID:  "E" + time.Now().UTC().Format("20060102150405") + hex.EncodeToString(sum[:8]),
+		EndToEndID:  "E" + submittedAt.Format("20060102150405") + hex.EncodeToString(sum[:8]),
 		TransferID:  transfer.ID,
-		SubmittedAt: time.Now().UTC(),
+		SubmittedAt: submittedAt,
 	}, nil
 }

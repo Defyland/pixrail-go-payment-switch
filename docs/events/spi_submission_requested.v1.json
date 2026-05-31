@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Defyland/pixrail-go-payment-switch/docs/events/fraud_score_calculated.v1.json",
-  "title": "FraudScoreCalculated v1",
+  "$id": "https://github.com/Defyland/pixrail-go-payment-switch/docs/events/spi_submission_requested.v1.json",
+  "title": "SPISubmissionRequested v1",
   "type": "object",
   "required": ["event_id", "event_type", "schema_version", "occurred_at", "producer", "tenant_id", "account_id", "pix_transfer_id", "correlation_id", "payload"],
   "properties": {
     "event_id": { "type": "string" },
-    "event_type": { "type": "string", "const": "fraud_score_calculated" },
+    "event_type": { "type": "string", "const": "spi_submission_requested" },
     "schema_version": { "type": "string", "const": "1" },
     "occurred_at": { "type": "string", "format": "date-time" },
     "producer": { "type": "string", "const": "pixrail.payment-switch" },
@@ -14,15 +14,7 @@
     "account_id": { "type": "string" },
     "pix_transfer_id": { "type": "string" },
     "correlation_id": { "type": "string" },
-    "payload": {
-      "type": "object",
-      "required": ["score", "status"],
-      "properties": {
-        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "status": { "type": "string", "enum": ["accepted", "review", "blocked"] }
-      },
-      "additionalProperties": true
-    }
+    "payload": { "type": "object" }
   },
   "additionalProperties": false
 }

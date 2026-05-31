@@ -7,6 +7,20 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: pixrail
+          POSTGRES_PASSWORD: pixrail
+          POSTGRES_DB: pixrail
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pixrail -d pixrail"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -21,6 +35,10 @@ jobs:
         run: go vet ./...
       - name: Tests with coverage
         run: go test -race -coverprofile=coverage.out ./...
+      - name: PostgreSQL integration
+        env:
+          PIXRAIL_POSTGRES_TEST_DSN: postgres://pixrail:pixrail@localhost:5432/pixrail?sslmode=disable
+        run: go test -count=1 -run TestPostgresStoreIntegration -v ./internal/postgres
       - name: Security scan
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
