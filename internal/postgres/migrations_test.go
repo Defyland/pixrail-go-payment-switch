@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestMigrationDocumentsProductionConstraints(t *testing.T) {
@@ -30,5 +31,24 @@ func TestMigrationDocumentsProductionConstraints(t *testing.T) {
 		if !strings.Contains(sql, fragment) {
 			t.Fatalf("migration missing %q", fragment)
 		}
+	}
+}
+
+func TestLoadMigrationsSortsAndChecksumsVersionedFiles(t *testing.T) {
+	migrations, err := LoadMigrations(fstest.MapFS{
+		"migrations/0002_second.sql": {Data: []byte("select 2;")},
+		"migrations/0001_first.sql":  {Data: []byte("select 1;")},
+	}, "migrations")
+	if err != nil {
+		t.Fatalf("load migrations: %v", err)
+	}
+	if len(migrations) != 2 {
+		t.Fatalf("expected two migrations, got %d", len(migrations))
+	}
+	if migrations[0].Version != "0001" || migrations[1].Version != "0002" {
+		t.Fatalf("expected sorted versions, got %+v", migrations)
+	}
+	if migrations[0].Checksum == "" || migrations[1].Checksum == "" {
+		t.Fatalf("expected migration checksums: %+v", migrations)
 	}
 }

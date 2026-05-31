@@ -24,11 +24,11 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	}
 	defer pool.Close()
 
-	raw, err := os.ReadFile("../../db/migrations/0001_pixrail_core.sql")
+	migrations, err := LoadMigrations(os.DirFS("../.."), "db/migrations")
 	if err != nil {
-		t.Fatalf("read migration: %v", err)
+		t.Fatalf("load migrations: %v", err)
 	}
-	if _, err := pool.Exec(ctx, string(raw)); err != nil {
+	if _, err := ApplyMigrations(ctx, pool, migrations, time.Now().UTC()); err != nil {
 		t.Fatalf("apply migration: %v", err)
 	}
 

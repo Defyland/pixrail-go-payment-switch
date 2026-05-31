@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Defyland/pixrail-go-payment-switch/internal/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -17,13 +18,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	migrationPath := os.Getenv("PIXRAIL_MIGRATION_PATH")
-	if migrationPath == "" {
-		migrationPath = "db/migrations/0001_pixrail_core.sql"
+	migrationDir := os.Getenv("PIXRAIL_MIGRATION_PATH")
+	if migrationDir == "" {
+		migrationDir = "db/migrations"
 	}
-	sql, err := os.ReadFile(migrationPath)
+
+	migrations, err := postgres.LoadMigrations(os.DirFS("."), migrationDir)
 	if err != nil {
-		logger.Error("migration_read_failed", "path", migrationPath, "error", err)
+		logger.Error("migration_read_failed", "path", migrationDir, "error", err)
 		os.Exit(1)
 	}
 
@@ -36,9 +38,10 @@ func main() {
 	}
 	defer pool.Close()
 
-	if _, err := pool.Exec(ctx, string(sql)); err != nil {
-		logger.Error("migration_apply_failed", "path", migrationPath, "error", err)
+	result, err := postgres.ApplyMigrations(ctx, pool, migrations, time.Now().UTC())
+	if err != nil {
+		logger.Error("migration_apply_failed", "path", migrationDir, "error", err)
 		os.Exit(1)
 	}
-	logger.Info("migration_applied", "path", migrationPath)
+	logger.Info("migrations_applied", "path", migrationDir, "applied", len(result.Applied), "skipped", len(result.Skipped))
 }
