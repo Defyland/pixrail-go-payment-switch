@@ -16,6 +16,7 @@ PixRail is designed to be close to production without depending on real payment-
 | Metrics | HTTP, decision, outbox, and runtime metrics are exposed in Prometheus format. |
 | Tracing | OpenTelemetry trace provider is configurable per environment. |
 | Benchmarks | API, k6, serialization, and rate limiter benchmarks are documented. |
+| Binary payload contracts | Payment events and participant-profile cache codecs are executable, benchmarked, and tested for malformed payloads. |
 | Optional pprof | `PIXRAIL_PPROF_ADDR` starts Go pprof endpoints for diagnostics. |
 | Worker safety | SPI and outbox work use persisted claims/leases. |
 | Callback authenticity | Provider callbacks require timestamped HMAC signatures. |
@@ -35,7 +36,7 @@ PixRail is designed to be close to production without depending on real payment-
 
 - Real DICT/SPI/antifraud providers are simulated. External adapters must add provider-specific idempotency keys, retries, circuit breaking, and contract tests.
 - Broker-backed outbox publishing is represented by a relay interface and in-memory publisher, not a real Kafka/RabbitMQ adapter.
-- Distributed rate limiting needs Redis or an equivalent shared store before horizontally scaling API replicas.
+- Distributed rate limiting needs Redis or an equivalent shared store before horizontally scaling API replicas; local algorithms and Redis-suitable cache codecs are implemented, but no external cache is required to run PixRail.
 - Kubernetes manifests are intentionally not included; runtime docs explain what must be checked for GOMAXPROCS, CPU throttling, p99, and pprof exposure.
 - Trace buffering with Redpanda/Kafka is documented as a production option, not started in local Compose.
 

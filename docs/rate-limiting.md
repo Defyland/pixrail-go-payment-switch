@@ -48,14 +48,14 @@ Environment: Apple M1 Max, Darwin arm64, Go 1.25.10.
 
 | Benchmark | ns/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| single-key token bucket | 18.87 | 0 | 0 |
-| single-key fixed window | 29.74 | 0 | 0 |
-| single-key sliding window | 55.04 | 125 | 0 |
-| single-key leaky bucket | 28.94 | 0 | 0 |
-| high-cardinality token bucket | 99.67 | 23 | 1 |
-| high-cardinality fixed window | 103.9 | 23 | 1 |
-| high-cardinality sliding window | 127.7 | 23 | 1 |
-| high-cardinality leaky bucket | 125.8 | 23 | 1 |
+| single-key token bucket | 37.79 | 0 | 0 |
+| single-key fixed window | 113.7 | 0 | 0 |
+| single-key sliding window | 73.18 | 124 | 0 |
+| single-key leaky bucket | 33.18 | 0 | 0 |
+| high-cardinality token bucket | 142.8 | 23 | 1 |
+| high-cardinality fixed window | 118.2 | 23 | 1 |
+| high-cardinality sliding window | 138.1 | 23 | 1 |
+| high-cardinality leaky bucket | 174.3 | 23 | 1 |
 
 ## Production Notes
 

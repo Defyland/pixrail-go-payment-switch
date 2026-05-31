@@ -21,6 +21,11 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - callback-hash settlement dedupe
 - executable manual review resolution
 - verification report with command output
+- serialization benchmarks for JSON, Protobuf wire, MsgPack, and CBOR
+- Redis-like participant profile cache codecs
+- executable rate-limiting strategies with recommendations
+- Go runtime/container hardening evidence
+- trace-buffering guidance without pretending local Kafka/Redpanda exists
 
 ## Files to Create or Update
 
@@ -50,7 +55,16 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - `internal/store/memory_test.go`
 - `internal/messaging/relay.go`
 - `internal/messaging/relay_test.go`
+- `internal/codec/*.go`
+- `internal/ratelimit/*.go`
+- `internal/observability/metrics.go`
+- `internal/app/pprof.go`
 - `internal/spec/repository_spec_test.go`
+- `docs/benchmarks/serialization.md`
+- `docs/rate-limiting.md`
+- `docs/runtime/gomaxprocs-kubernetes.md`
+- `docs/observability/trace-buffering.md`
+- `docs/production-readiness.md`
 
 ## Acceptance Criteria Mapping
 
@@ -72,6 +86,11 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 | Readiness is not fake | Add store health interface and readiness failure tests. |
 | Outbox is operationally credible | Add relay with publisher ack, failure retry, and tests. |
 | Security docs cover abuse and secrets | Add data classification, secrets, and abuse case docs. |
+| Serialization choices are evidence-backed | Add codec package, codec tests, benchmarks, and benchmark documentation. |
+| Redis-like cache state has concrete binary contracts | Add MsgPack and CBOR participant-profile cache codecs with malformed-payload tests. |
+| Rate limiting is not a placeholder | Implement fixed window, sliding window, leaky bucket, token bucket tests/benchmarks, and endpoint recommendations. |
+| Runtime hardening is explicit | Add startup runtime logs, runtime metrics, pprof opt-in, PostgreSQL pool config, and container CPU docs. |
+| Trace buffering is honest | Document Redpanda/Kafka trace buffering as production option outside local scope. |
 | Scalability and operational cost are explicit | Add required standalone docs. |
 | Verification is auditable | Record commands and results in verification report. |
 
@@ -85,6 +104,8 @@ go vet ./...
 npx --yes @redocly/cli lint openapi.yaml
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 go test -bench=. -benchmem ./internal/api
+go test -bench=. -benchmem ./internal/codec
+go test -bench=. -benchmem ./internal/ratelimit
 go test -run TestCreateTransferLatencyBudget -v ./internal/api
 docker build -t pixrail-api:local .
 ```
@@ -94,6 +115,7 @@ docker build -t pixrail-api:local .
 - Local Docker daemon may be unavailable; if so, Docker build is documented as locally blocked and covered by CI.
 - PostgreSQL integration is repeatable through the CI service container and local Compose DSN.
 - In-memory adapter remains the local default; production must use durable storage in a real deployment.
+- Benchmark numbers vary by host and Go version; the committed docs record one local run and keep commands executable.
 
 ## Deferred Work
 

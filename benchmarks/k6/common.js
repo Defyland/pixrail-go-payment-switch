@@ -1,3 +1,5 @@
+import http from "k6/http";
+
 export const BASE_URL = __ENV.BASE_URL || "http://localhost:8080";
 export const API_KEY = __ENV.PIXRAIL_API_KEY || "dev-secret";
 
@@ -20,4 +22,16 @@ export function headers(i) {
     "Idempotency-Key": `k6-${requestID}`,
     "X-Correlation-ID": `corr-k6-${requestID}`,
   };
+}
+
+export function transferParams(i, phase = "measured") {
+  return {
+    headers: headers(i),
+    tags: { phase },
+  };
+}
+
+export function warmup() {
+  http.get(`${BASE_URL}/readyz`, { tags: { phase: "warmup" } });
+  http.post(`${BASE_URL}/v1/pix/transfers`, transferPayload(0), transferParams("warmup", "warmup"));
 }

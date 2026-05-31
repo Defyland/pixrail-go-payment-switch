@@ -40,10 +40,11 @@ Security evidence must cover role-scoped API keys, signed provider callbacks, te
 ## Observability Bar
 
 The service must expose health, readiness, structured logs, request ID, correlation ID, domain metrics, Prometheus output, OpenTelemetry traces, dashboard JSON, alerts, and runbooks. Readiness must reflect dependency health, not just process liveness.
+Runtime evidence must include `GOMAXPROCS`, `NumCPU`, goroutines, heap allocation, pprof opt-in, and container CPU-throttling guidance.
 
 ## Performance Bar
 
-Benchmarks must include smoke/load/stress/spike k6 profiles plus local measured p50, p95, p99, throughput, error rate, CPU/memory notes, bottlenecks, and next optimization.
+Benchmarks must include smoke/load/stress/spike k6 profiles plus local measured p50, p95, p99, throughput, error rate, CPU/memory notes, bottlenecks, and next optimization. Internal payload choices must be backed by executable serialization benchmarks, not generic claims.
 
 ## Scalability Bar
 
@@ -86,8 +87,13 @@ The project must run Go tests, race tests, vet, OpenAPI validation, security sca
 | Outbox relay has retry semantics | `internal/messaging/relay.go`, `internal/messaging/relay_test.go`, `internal/store/memory.go` | Done | Relay handles publish ack and retry evidence. |
 | Security model covers BOLA, roles, and secrets | `docs/security/threat-model.md`, `docs/security/authorization-matrix.md`, `docs/security/abuse-cases.md`, `docs/security/secrets.md` | Done | Tests cover tenant isolation, auth, and forbidden operational roles. |
 | Provider callbacks are signed | `internal/api/server.go`, `internal/api/server_test.go`, `docs/security/threat-model.md` | Done | Callback body requires timestamped HMAC signature before settlement processing. |
+| Production runtime hardening is explicit | `internal/app/runtime.go`, `internal/app/pprof.go`, `internal/postgres/store.go`, `docs/production-readiness.md` | Done | Startup logs include runtime shape; HTTP, SPI, PostgreSQL pool, tracing, and pprof have bounded runtime behavior. |
 | Observability has domain metrics and runbooks | `internal/observability/metrics.go`, `observability/grafana/pixrail-overview-dashboard.json`, `docs/observability/overview.md`, `docs/runbooks/` | Done | Domain decision/outbox metrics are present. |
+| Runtime metrics and container guidance exist | `internal/observability/metrics.go`, `docs/runtime/gomaxprocs-kubernetes.md` | Done | Prometheus exposes Go runtime shape; docs explain CPU limits, throttling, p99, and pprof exposure. |
+| Distributed trace buffering is documented honestly | `docs/observability/trace-buffering.md` | Done | Redpanda/Kafka buffering is described as a production option, not a fake local dependency. |
 | Performance evidence is measured | `benchmarks/results/2026-05-30-local-baseline.md`, `internal/api/server_test.go`, `benchmarks/k6/` | Done | Native p50/p95/p99 plus k6 smoke/load/stress/spike output recorded. |
+| Serialization choices are benchmarked | `internal/codec`, `docs/benchmarks/serialization.md` | Done | JSON, Protobuf wire, MsgPack, CBOR, payment events, and participant-profile cache payloads are executable and measured. |
+| Rate limiting strategies are real and tested | `internal/ratelimit`, `docs/rate-limiting.md` | Done | Token bucket, fixed window, sliding window, and leaky bucket include tests, benchmarks, and endpoint recommendations. |
 | Scalability and cost are explicit | `docs/scalability.md`, `docs/operational-cost.md` | Done | Names bottlenecks and accepted cost. |
 | CI covers quality gates | `.github/workflows/ci.yml` | Done | Includes format, race/coverage tests, live PostgreSQL integration, security, OpenAPI, Docker. |
 | Docker and Compose validated locally | `Dockerfile`, `compose.yaml`, `docker-compose.yml`, `docs/spec-driven/verification-report.md` | Done | Local Docker build, PostgreSQL Compose, migration runner, API, Prometheus, smoke, and k6 all passed. |
