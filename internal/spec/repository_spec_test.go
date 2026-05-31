@@ -44,6 +44,7 @@ func TestRepositorySpecRequiredArtifacts(t *testing.T) {
 		"docs/benchmarks/serialization.md",
 		"docs/diagrams",
 		"docs/events",
+		"docs/rate-limiting.md",
 		"docs/runbooks",
 		"docs/security",
 		"docs/security/data-classification.md",
