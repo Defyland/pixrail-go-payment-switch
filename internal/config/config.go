@@ -39,6 +39,8 @@ type Config struct {
 	TenantBucketSize         int
 	DictBucketSize           int
 	DictTimeout              time.Duration
+	WorkerBatchSize          int
+	WorkerInterval           time.Duration
 	ShutdownTimeout          time.Duration
 	RequireConfiguredSecrets bool
 	TracingExporter          string
@@ -54,6 +56,8 @@ func Load() (Config, error) {
 		TenantBucketSize:         getenvInt("PIXRAIL_TENANT_BUCKET_SIZE", 120),
 		DictBucketSize:           getenvInt("PIXRAIL_DICT_BUCKET_SIZE", 60),
 		DictTimeout:              getenvDuration("PIXRAIL_DICT_TIMEOUT", 300*time.Millisecond),
+		WorkerBatchSize:          getenvInt("PIXRAIL_WORKER_BATCH_SIZE", 100),
+		WorkerInterval:           getenvDuration("PIXRAIL_WORKER_INTERVAL", time.Second),
 		ShutdownTimeout:          getenvDuration("PIXRAIL_SHUTDOWN_TIMEOUT", 5*time.Second),
 		RequireConfiguredSecrets: env == "production",
 		TracingExporter:          getenv("PIXRAIL_TRACING_EXPORTER", defaultTracingExporter(env)),

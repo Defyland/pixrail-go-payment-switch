@@ -10,6 +10,7 @@ PixRail will eventually run multiple hot-path components: API, DICT resolver, ra
 - PostgreSQL persistence, checksum-validated versioned migrations, and a Compose migration container are implemented.
 - API keys are role-scoped for tenant, worker, risk, and provider surfaces.
 - SPI submission and outbox relay work use persisted claim leases so multiple local workers do not process the same item at the same time.
+- `cmd/pixrail-worker` provides the long-running SPI submission process for accepted transfers.
 - Redis-backed distributed rate limiting, a real broker publisher, and ClickHouse remain production-hardening adapters, not MVP blockers.
 
 ## Deferred platform work

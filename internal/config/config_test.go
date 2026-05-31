@@ -102,6 +102,9 @@ func TestLoadTracingExporterDefaults(t *testing.T) {
 	if cfg.TracingExporter != "stdout" {
 		t.Fatalf("expected development tracing stdout, got %q", cfg.TracingExporter)
 	}
+	if cfg.WorkerBatchSize != 100 || cfg.WorkerInterval.String() != "1s" {
+		t.Fatalf("unexpected worker defaults: batch=%d interval=%s", cfg.WorkerBatchSize, cfg.WorkerInterval)
+	}
 
 	t.Setenv("PIXRAIL_ENV", "production")
 	t.Setenv("PIXRAIL_API_KEYS", "tenant_a:secret-a")

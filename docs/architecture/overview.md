@@ -12,6 +12,7 @@ PixRail is a payment switch optimized for the transfer decision hot path. It kee
 | Fraud engine | rules-based score and decision log |
 | SPI simulator | SPI message ID and end-to-end ID generation |
 | Store | transfer state, idempotency index, outbox, audit log |
+| SPI worker | long-running polling process for accepted transfers that need SPI submission |
 | Observability | logs, metrics, traces, health, readiness |
 
 ## Boundaries

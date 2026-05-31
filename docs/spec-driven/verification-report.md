@@ -4,19 +4,19 @@
 
 PixRail was updated against `specs/general-project-spec.md`, `specs/senior-engineering-rubric.md`, and `specs/spec-driven-senior-quality.md`.
 
-The repository now has the required spec-driven documents, product and domain evidence, engineering case study, scalability and operational-cost analysis, expanded architecture views, checksum-validated PostgreSQL migrations, dependency-backed readiness, claim-protected outbox relay behavior, claim-protected SPI submission, role-scoped API keys, request-fingerprint idempotency, callback-hash settlement replay, executable review resolution, configurable trace exporting, k6 evidence, and updated repository conformance tests.
+The repository now has the required spec-driven documents, product and domain evidence, engineering case study, scalability and operational-cost analysis, expanded architecture views, checksum-validated PostgreSQL migrations, dependency-backed readiness, claim-protected outbox relay behavior, claim-protected SPI submission, a long-running SPI worker process, role-scoped API keys, strict event payload schemas, request-fingerprint idempotency, callback-hash settlement replay, executable review resolution, configurable trace exporting, k6 evidence, and updated repository conformance tests.
 
 ## Commands Run
 
 | Command | Result | Evidence |
 | --- | --- | --- |
 | `go test ./...` | Passed | All packages green, including `internal/postgres`, `internal/messaging`, `internal/observability`, and `internal/spec`. |
-| `go test ./...` after worker-lease, role-auth, and docs hardening | Passed | All packages green after `0003_worker_leases.sql`, SPI/outbox claims, endpoint role checks, and repository spec updates. |
+| `go test ./...` after worker, event-schema, and docs hardening | Passed | All packages green after `cmd/pixrail-worker`, strict event payload schemas, and repository spec updates. |
 | `go test -race ./...` | Passed | Race-enabled suite passed across all packages. |
 | `go vet ./...` | Passed | No vet findings. |
 | `npx --yes @redocly/cli lint openapi.yaml` | Passed | OpenAPI validated in 19 ms with no warnings. |
 | `go run golang.org/x/vuln/cmd/govulncheck@latest ./...` | Passed | `No vulnerabilities found.` |
-| `docker compose -f compose.yaml config` | Passed | Compose rendered successfully after role-scoped `PIXRAIL_API_KEYS`; generated config had 88 lines. |
+| `docker compose -f compose.yaml config` | Passed | Compose rendered successfully after API and worker wiring; generated config had 108 lines. |
 | `go test -bench=. -benchmem ./internal/api` | Passed | `BenchmarkCreateTransfer-10 48933 31595 ns/op 27823 B/op 221 allocs/op`. |
 | `go test -run TestCreateTransferLatencyBudget -v ./internal/api` | Passed | p50 `17.459us`, p95 `25.833us`, p99 `52.375us`, throughput `40658 rps`, error rate `0.00%`. |
 | `docker build -t pixrail-api:local .` | Passed | Multi-stage API image built successfully. |
@@ -38,7 +38,9 @@ The repository now has the required spec-driven documents, product and domain ev
 - Request fingerprint is stored and mismatched idempotency replay returns conflict.
 - Create persists `accepted` state before SPI submission; SPI identifiers are recorded through explicit post-persist operation.
 - SPI submission claims the accepted transfer before the SPI client call and checks the claim token before approval persistence.
+- `cmd/pixrail-worker` continuously drains accepted transfers through `SubmitPendingSPI`.
 - Outbox relay claims records before publish and checks the claim token before publish/failure updates.
+- Event schemas define strict payload fields, not only a generic envelope.
 - API keys are role-scoped for tenant, worker, risk, and provider actions.
 - Review state has an executable approve/block path.
 - Terminal settlement replay is guarded by callback hash and SPI message ID.
@@ -64,5 +66,4 @@ The repository now has the required spec-driven documents, product and domain ev
 - Add broker-backed publisher integration and DLQ replay tooling.
 - Add Redis-backed distributed rate limiting before horizontal API scaling.
 - Add signed SPI callback verification before external provider integration.
-- Add long-running worker process around `SubmitPendingSPI` when moving beyond local/API-triggered simulation.
 - Add real provider idempotency keys and signed callback verification before external SPI traffic.

@@ -14,6 +14,7 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - checksum-validated versioned migrations
 - post-persist SPI submission semantics
 - SPI and outbox worker claim leases
+- long-running SPI submission worker process
 - role-scoped API keys for tenant, worker, risk, and provider actions
 - request-fingerprint idempotency
 - callback-hash settlement dedupe
@@ -35,6 +36,7 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - `README.md`
 - `db/migrations/*.sql`
 - `cmd/pixrail-migrate/main.go`
+- `cmd/pixrail-worker/main.go`
 - `openapi.yaml`
 - `internal/api/server.go`
 - `internal/api/server_test.go`
@@ -60,6 +62,7 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 | Data consistency is production-aware | Add PostgreSQL migration and update database design docs. |
 | Create is side-effect safe | Persist `accepted` transfer state before SPI submission; record SPI later through an explicit operation. |
 | External work is claim-protected | Add SPI and outbox leases with claim-token checked updates. |
+| Pending SPI work has an operational process | Add `cmd/pixrail-worker` and wire it into Compose. |
 | Idempotency is payload-aware | Store request fingerprint and return `409` on mismatched reuse. |
 | Operational surfaces are role-scoped | Require separate API key roles for tenant API, SPI worker, risk review, and provider callback actions. |
 | Review state is operational | Add review decision operation that approves into SPI-pending state or blocks. |

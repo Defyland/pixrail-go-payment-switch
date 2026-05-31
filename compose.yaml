@@ -13,6 +13,20 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+  worker:
+    build: .
+    entrypoint: ["/pixrail-worker"]
+    environment:
+      PIXRAIL_ENV: development
+      PIXRAIL_API_KEYS: tenant_demo:dev-secret:tenant,tenant_demo:worker-secret:worker,tenant_demo:risk-secret:risk,tenant_demo:provider-secret:provider
+      PIXRAIL_STORE_DRIVER: postgres
+      PIXRAIL_DATABASE_URL: postgres://pixrail:pixrail@postgres:5432/pixrail?sslmode=disable
+      PIXRAIL_TRACING_EXPORTER: none
+      PIXRAIL_WORKER_BATCH_SIZE: 100
+      PIXRAIL_WORKER_INTERVAL: 1s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
   migrate:
     image: golang:1.25-alpine
     working_dir: /src

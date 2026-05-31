@@ -54,6 +54,7 @@ The switch owns payment-rail state only. Settlement, ledger entries, balances, r
 - structured logs through `log/slog`
 - Prometheus text metrics
 - PostgreSQL adapter and migration runner
+- long-running SPI submission worker
 - Docker and Compose
 - k6 benchmark scripts
 - GitHub Actions CI
@@ -83,7 +84,7 @@ The messaging topology defines a payment rail exchange, routing key, consumer qu
 
 ## Database design
 
-The local default uses an in-memory repository so tests and simple demos have no external dependency. Production mode requires `PIXRAIL_STORE_DRIVER=postgres` and `PIXRAIL_DATABASE_URL`. PostgreSQL migrations are versioned under [db/migrations](db/migrations), the checksum-validating migration runner is [cmd/pixrail-migrate](cmd/pixrail-migrate), and the adapter is implemented under [internal/postgres](internal/postgres).
+The local default uses an in-memory repository so tests and simple demos have no external dependency. Production mode requires `PIXRAIL_STORE_DRIVER=postgres` and `PIXRAIL_DATABASE_URL`. PostgreSQL migrations are versioned under [db/migrations](db/migrations), the checksum-validating migration runner is [cmd/pixrail-migrate](cmd/pixrail-migrate), the long-running SPI worker is [cmd/pixrail-worker](cmd/pixrail-worker), and the adapter is implemented under [internal/postgres](internal/postgres).
 
 Transaction boundary: transfer state, request fingerprint, decision audit, and outbox inserts are committed together. SPI submission happens only after a persisted accepted transfer exists and a worker claim has been stored. Settlement callbacks are guarded by SPI message ID, callback hash, and terminal-state checks.
 
@@ -157,6 +158,8 @@ Compose is available for production-like process wiring:
 docker compose -f compose.yaml up --build
 ```
 
+The Compose path starts PostgreSQL, applies migrations, starts the API, and starts `pixrail-worker`. The worker polls accepted transfers with `PIXRAIL_WORKER_BATCH_SIZE` and `PIXRAIL_WORKER_INTERVAL`, then uses the same claim-protected `SubmitPendingSPI` path exposed for local API-triggered simulation.
+
 To run against PostgreSQL, apply the versioned migrations with `pixrail-migrate` and start with:
 
 ```sh
@@ -167,7 +170,18 @@ PIXRAIL_API_KEYS=tenant_demo:dev-secret:tenant,tenant_demo:worker-secret:worker,
 go run ./cmd/pixrail-api
 ```
 
-The Compose path starts PostgreSQL, applies the migration with `pixrail-migrate`, then boots the API with `PIXRAIL_STORE_DRIVER=postgres`.
+To run the worker manually against the same PostgreSQL database:
+
+```sh
+PIXRAIL_STORE_DRIVER=postgres \
+PIXRAIL_DATABASE_URL=postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable \
+PIXRAIL_API_KEYS=tenant_demo:dev-secret:tenant,tenant_demo:worker-secret:worker,tenant_demo:risk-secret:risk,tenant_demo:provider-secret:provider \
+PIXRAIL_WORKER_BATCH_SIZE=100 \
+PIXRAIL_WORKER_INTERVAL=1s \
+go run ./cmd/pixrail-worker
+```
+
+The Compose path starts PostgreSQL, applies migrations with `pixrail-migrate`, then boots the API and worker with `PIXRAIL_STORE_DRIVER=postgres`.
 
 To apply the migrations manually:
 

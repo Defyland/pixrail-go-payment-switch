@@ -51,6 +51,7 @@ func TestRepositorySpecRequiredArtifacts(t *testing.T) {
 		"docs/scalability.md",
 		"docs/operational-cost.md",
 		"cmd/pixrail-migrate/main.go",
+		"cmd/pixrail-worker/main.go",
 		"db/migrations/0001_pixrail_core.sql",
 		"db/migrations/0002_consistency_hardening.sql",
 		"db/migrations/0003_worker_leases.sql",
