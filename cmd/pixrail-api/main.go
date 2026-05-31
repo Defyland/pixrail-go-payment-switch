@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -22,12 +23,21 @@ func main() {
 		logger.Error("config_load_failed", "error", err)
 		os.Exit(1)
 	}
+	logger.Info("pixrail_runtime_configured",
+		"component", "api",
+		"environment", cfg.Environment,
+		"gomaxprocs", runtime.GOMAXPROCS(0),
+		"num_cpu", runtime.NumCPU(),
+		"store_driver", cfg.StoreDriver,
+	)
 
 	shutdownTracing := observability.ConfigureTracing("pixrail-api", cfg.TracingExporter, os.Stdout)
+	shutdownPprof := app.StartPprofServer(cfg.PprofAddr, logger)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = shutdownTracing(ctx)
+		_ = shutdownPprof(ctx)
 	}()
 
 	store, closeStore, err := app.BuildStore(context.Background(), cfg)
@@ -48,7 +58,7 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("pixrail_api_starting", "addr", cfg.Addr, "environment", cfg.Environment)
+		logger.Info("pixrail_api_starting", "addr", cfg.Addr, "environment", cfg.Environment, "pprof_addr", cfg.PprofAddr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("http_server_failed", "error", err)
 			os.Exit(1)

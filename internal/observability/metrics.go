@@ -3,6 +3,7 @@ package observability
 import (
 	"fmt"
 	"io"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -62,6 +63,16 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 
 	writeMetricHeader(w, "pixrail_uptime_seconds", "gauge", "Seconds since the process started.")
 	fmt.Fprintf(w, "pixrail_uptime_seconds %.0f\n", time.Since(m.started).Seconds())
+	writeMetricHeader(w, "pixrail_runtime_gomaxprocs", "gauge", "Current Go scheduler GOMAXPROCS value.")
+	fmt.Fprintf(w, "pixrail_runtime_gomaxprocs %d\n", runtime.GOMAXPROCS(0))
+	writeMetricHeader(w, "pixrail_runtime_num_cpu", "gauge", "Logical CPUs visible to the Go runtime.")
+	fmt.Fprintf(w, "pixrail_runtime_num_cpu %d\n", runtime.NumCPU())
+	writeMetricHeader(w, "pixrail_runtime_goroutines", "gauge", "Current goroutine count.")
+	fmt.Fprintf(w, "pixrail_runtime_goroutines %d\n", runtime.NumGoroutine())
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	writeMetricHeader(w, "pixrail_runtime_heap_alloc_bytes", "gauge", "Currently allocated heap bytes.")
+	fmt.Fprintf(w, "pixrail_runtime_heap_alloc_bytes %d\n", mem.HeapAlloc)
 	writeMetricHeader(w, "pixrail_http_requests_total", "counter", "HTTP requests by method, route, and status.")
 	writeCounterMap(w, "pixrail_http_requests_total", m.requests)
 	writeMetricHeader(w, "pixrail_transfer_decisions_total", "counter", "Pix transfer decisions by status.")

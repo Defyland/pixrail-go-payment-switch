@@ -17,6 +17,10 @@ func TestMetricsWritePrometheus(t *testing.T) {
 	text := out.String()
 	for _, expected := range []string{
 		"pixrail_http_requests_total",
+		"pixrail_runtime_gomaxprocs",
+		"pixrail_runtime_num_cpu",
+		"pixrail_runtime_goroutines",
+		"pixrail_runtime_heap_alloc_bytes",
 		"pixrail_transfer_decisions_total",
 		"pixrail_outbox_events_total",
 		"pixrail_http_request_latency_seconds",

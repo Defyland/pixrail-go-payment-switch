@@ -6,6 +6,7 @@ PixRail will eventually run multiple hot-path components: API, DICT resolver, ra
 
 - PixRail ships a runnable Go HTTP API with in-memory and PostgreSQL storage adapters.
 - Health, readiness, Prometheus metrics, structured logs, and OpenTelemetry spans are implemented.
+- Runtime metrics, startup CPU/GOMAXPROCS logs, optional pprof, and explicit PostgreSQL pool configuration are implemented.
 - k6 scripts and native Go benchmarks are included for smoke, load, stress, and spike validation.
 - PostgreSQL persistence, checksum-validated versioned migrations, and a Compose migration container are implemented.
 - API keys are role-scoped for tenant, worker, risk, and provider surfaces.

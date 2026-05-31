@@ -19,8 +19,30 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-func New(ctx context.Context, databaseURL string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+type PoolOptions struct {
+	MinConns        int32
+	MaxConns        int32
+	MaxConnLifetime time.Duration
+}
+
+func New(ctx context.Context, databaseURL string, options ...PoolOptions) (*Store, error) {
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse postgres pool config: %w", err)
+	}
+	if len(options) > 0 {
+		option := options[0]
+		if option.MinConns > 0 {
+			config.MinConns = option.MinConns
+		}
+		if option.MaxConns > 0 {
+			config.MaxConns = option.MaxConns
+		}
+		if option.MaxConnLifetime > 0 {
+			config.MaxConnLifetime = option.MaxConnLifetime
+		}
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("create postgres pool: %w", err)
 	}

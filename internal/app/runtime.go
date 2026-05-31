@@ -19,7 +19,11 @@ func BuildStore(ctx context.Context, cfg config.Config) (switcher.Store, func(),
 	case "memory":
 		return memorystore.NewMemoryStore(), func() {}, nil
 	case "postgres":
-		store, err := postgres.New(ctx, cfg.DatabaseURL)
+		store, err := postgres.New(ctx, cfg.DatabaseURL, postgres.PoolOptions{
+			MinConns:        int32(cfg.PostgresMinConns),
+			MaxConns:        int32(cfg.PostgresMaxConns),
+			MaxConnLifetime: cfg.PostgresMaxConnLifetime,
+		})
 		if err != nil {
 			return nil, nil, err
 		}

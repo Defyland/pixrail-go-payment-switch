@@ -120,6 +120,9 @@ func TestLoadTracingExporterDefaults(t *testing.T) {
 	if cfg.WorkerBatchSize != 100 || cfg.WorkerInterval.String() != "1s" {
 		t.Fatalf("unexpected worker defaults: batch=%d interval=%s", cfg.WorkerBatchSize, cfg.WorkerInterval)
 	}
+	if cfg.PostgresMaxConns != 10 || cfg.PostgresMinConns != 0 || cfg.PostgresMaxConnLifetime.String() != "30m0s" {
+		t.Fatalf("unexpected postgres pool defaults: min=%d max=%d lifetime=%s", cfg.PostgresMinConns, cfg.PostgresMaxConns, cfg.PostgresMaxConnLifetime)
+	}
 
 	t.Setenv("PIXRAIL_ENV", "production")
 	t.Setenv("PIXRAIL_API_KEYS", "tenant_a:secret-a")

@@ -36,6 +36,9 @@ type Config struct {
 	APIKeys                    map[string]APIKey
 	StoreDriver                string
 	DatabaseURL                string
+	PostgresMinConns           int
+	PostgresMaxConns           int
+	PostgresMaxConnLifetime    time.Duration
 	TenantBucketSize           int
 	DictBucketSize             int
 	DictTimeout                time.Duration
@@ -43,6 +46,7 @@ type Config struct {
 	WorkerInterval             time.Duration
 	ProviderCallbackSecret     string
 	ProviderSignatureTolerance time.Duration
+	PprofAddr                  string
 	ShutdownTimeout            time.Duration
 	RequireConfiguredSecrets   bool
 	TracingExporter            string
@@ -55,6 +59,9 @@ func Load() (Config, error) {
 		Environment:                env,
 		StoreDriver:                getenv("PIXRAIL_STORE_DRIVER", "memory"),
 		DatabaseURL:                getenv("PIXRAIL_DATABASE_URL", ""),
+		PostgresMinConns:           getenvInt("PIXRAIL_POSTGRES_MIN_CONNS", 0),
+		PostgresMaxConns:           getenvInt("PIXRAIL_POSTGRES_MAX_CONNS", 10),
+		PostgresMaxConnLifetime:    getenvDuration("PIXRAIL_POSTGRES_MAX_CONN_LIFETIME", 30*time.Minute),
 		TenantBucketSize:           getenvInt("PIXRAIL_TENANT_BUCKET_SIZE", 120),
 		DictBucketSize:             getenvInt("PIXRAIL_DICT_BUCKET_SIZE", 60),
 		DictTimeout:                getenvDuration("PIXRAIL_DICT_TIMEOUT", 300*time.Millisecond),
@@ -62,6 +69,7 @@ func Load() (Config, error) {
 		WorkerInterval:             getenvDuration("PIXRAIL_WORKER_INTERVAL", time.Second),
 		ProviderCallbackSecret:     getenv("PIXRAIL_PROVIDER_CALLBACK_SECRET", defaultProviderCallbackSecret(env)),
 		ProviderSignatureTolerance: getenvDuration("PIXRAIL_PROVIDER_SIGNATURE_TOLERANCE", 5*time.Minute),
+		PprofAddr:                  getenv("PIXRAIL_PPROF_ADDR", ""),
 		ShutdownTimeout:            getenvDuration("PIXRAIL_SHUTDOWN_TIMEOUT", 5*time.Second),
 		RequireConfiguredSecrets:   env == "production",
 		TracingExporter:            getenv("PIXRAIL_TRACING_EXPORTER", defaultTracingExporter(env)),

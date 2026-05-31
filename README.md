@@ -113,6 +113,8 @@ PixRail exposes:
 - JSON request logs with request and correlation IDs
 - OpenTelemetry spans around HTTP routes; stdout exporting is controlled by `PIXRAIL_TRACING_EXPORTER`
 - Prometheus counters and latency quantiles
+- runtime metrics for `GOMAXPROCS`, visible CPU, goroutines, and heap allocation
+- optional pprof through `PIXRAIL_PPROF_ADDR`
 - Grafana dashboard definition in [observability/grafana/pixrail-overview-dashboard.json](observability/grafana/pixrail-overview-dashboard.json)
 
 ## Security considerations
@@ -126,7 +128,7 @@ Security coverage is documented in [docs/security/threat-model.md](docs/security
 - In-memory adapters are accepted for local development; PostgreSQL is the durable store path, while Redis and broker adapters are the next production-hardening slice.
 - Full Event Sourcing, Kubernetes, service mesh, CDC, and data-lake analytics are deferred until provider integrations and persistence are real.
 
-Spec-driven readiness evidence is maintained in [docs/spec-driven](docs/spec-driven). Scalability and operational-cost analysis live in [docs/scalability.md](docs/scalability.md) and [docs/operational-cost.md](docs/operational-cost.md).
+Spec-driven readiness evidence is maintained in [docs/spec-driven](docs/spec-driven). Production hardening, runtime, rate limiting, serialization, scalability, and operational-cost analysis live in [docs/production-readiness.md](docs/production-readiness.md), [docs/runtime/gomaxprocs-kubernetes.md](docs/runtime/gomaxprocs-kubernetes.md), [docs/rate-limiting.md](docs/rate-limiting.md), [docs/benchmarks/serialization.md](docs/benchmarks/serialization.md), [docs/scalability.md](docs/scalability.md), and [docs/operational-cost.md](docs/operational-cost.md).
 
 ## How to run locally
 
