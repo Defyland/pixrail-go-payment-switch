@@ -23,6 +23,7 @@ Every payment-rail event must include:
 - Consumers deduplicate by `event_id`.
 - `end_to_end_id`, SPI message IDs, and idempotency keys are unique business identifiers.
 - Duplicate or out-of-order SPI callbacks must append evidence without duplicating state transitions.
+- Relay workers claim outbox records with a token and lease before publishing; a publish acknowledgement or retry update is accepted only from the owning claim.
 
 ## Versioning and compatibility
 
@@ -38,6 +39,7 @@ Every payment-rail event must include:
 - propagate `correlation_id` from the HTTP request into every event
 - keep `tenant_id`, `account_id`, and `pix_transfer_id` populated for isolation and partitioning
 - publish only after durable outbox insert
+- use the outbox claim/lease contract when multiple relay workers are running
 
 ## Consumer responsibilities
 

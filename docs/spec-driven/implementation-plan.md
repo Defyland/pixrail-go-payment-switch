@@ -11,7 +11,10 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - readiness tied to dependency health
 - outbox relay/retry semantics
 - PostgreSQL migration evidence
+- checksum-validated versioned migrations
 - post-persist SPI submission semantics
+- SPI and outbox worker claim leases
+- role-scoped API keys for tenant, worker, risk, and provider actions
 - request-fingerprint idempotency
 - callback-hash settlement dedupe
 - executable manual review resolution
@@ -30,7 +33,8 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - `docs/security/*.md`
 - `docs/architecture/*.md`
 - `README.md`
-- `db/migrations/0001_pixrail_core.sql`
+- `db/migrations/*.sql`
+- `cmd/pixrail-migrate/main.go`
 - `openapi.yaml`
 - `internal/api/server.go`
 - `internal/api/server_test.go`
@@ -55,7 +59,9 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 | Case study answers rubric | Add `docs/engineering-case-study.md` with the required table of contents. |
 | Data consistency is production-aware | Add PostgreSQL migration and update database design docs. |
 | Create is side-effect safe | Persist `accepted` transfer state before SPI submission; record SPI later through an explicit operation. |
+| External work is claim-protected | Add SPI and outbox leases with claim-token checked updates. |
 | Idempotency is payload-aware | Store request fingerprint and return `409` on mismatched reuse. |
+| Operational surfaces are role-scoped | Require separate API key roles for tenant API, SPI worker, risk review, and provider callback actions. |
 | Review state is operational | Add review decision operation that approves into SPI-pending state or blocks. |
 | Callback replay is strict | Store callback hash and reject conflicting terminal callbacks. |
 | Readiness is not fake | Add store health interface and readiness failure tests. |
@@ -89,4 +95,4 @@ docker build -t pixrail-api:local .
 - Broker-backed outbox publisher.
 - Redis-backed distributed rate limiter.
 - Real DICT/SPI provider adapters.
-- Signed provider callbacks beyond local SPI message and callback-hash validation.
+- Signed provider callbacks beyond role-scoped local SPI message and callback-hash validation.

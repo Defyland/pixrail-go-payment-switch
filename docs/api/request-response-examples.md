@@ -44,7 +44,7 @@ Create is deliberately pre-SPI: the transfer, idempotency fingerprint, audit rec
 
 ```sh
 curl -s -X POST http://localhost:8080/v1/pix/transfers/pxt_123/spi-submissions \
-  -H 'Authorization: Bearer dev-secret'
+  -H 'Authorization: Bearer worker-secret'
 ```
 
 ```json
@@ -85,7 +85,7 @@ High-risk receiver keys return `status: blocked`; no SPI message is created.
 
 ```sh
 curl -s -X POST http://localhost:8080/v1/pix/transfers/pxt_123/reviews \
-  -H 'Authorization: Bearer dev-secret' \
+  -H 'Authorization: Bearer risk-secret' \
   -H 'Content-Type: application/json' \
   -d '{"decision":"approve","reason":"analyst approved after review"}'
 ```
@@ -96,7 +96,7 @@ Approving a review moves the transfer back to `accepted` and emits a new `spi_su
 
 ```sh
 curl -s -X POST http://localhost:8080/v1/pix/transfers/pxt_123/spi-callbacks \
-  -H 'Authorization: Bearer dev-secret' \
+  -H 'Authorization: Bearer provider-secret' \
   -H 'Content-Type: application/json' \
   -d '{"spi_message_id":"spi_123","status":"accepted","code":"ACSC"}'
 ```
@@ -116,6 +116,23 @@ curl -s -X POST http://localhost:8080/v1/pix/transfers \
   "error": {
     "code": "unauthorized",
     "message": "valid API key is required",
+    "details": null
+  }
+}
+```
+
+## Authorization role failure
+
+```sh
+curl -s -X POST http://localhost:8080/v1/pix/transfers/pxt_123/spi-submissions \
+  -H 'Authorization: Bearer dev-secret'
+```
+
+```json
+{
+  "error": {
+    "code": "forbidden",
+    "message": "API key is not allowed to access this endpoint",
     "details": null
   }
 }

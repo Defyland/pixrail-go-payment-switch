@@ -19,7 +19,7 @@ Fintech teams often need to prove Pix transfer intake, DICT lookup behavior, fra
 
 ## Main features
 
-- API key authentication with tenant isolation
+- role-scoped API key authentication with tenant isolation
 - `POST /v1/pix/transfers` idempotent transfer creation
 - DICT-like receiver key resolution with timeout and not-found simulation
 - token-bucket rate limiting for tenant/account and DICT lookup pressure
@@ -28,6 +28,7 @@ Fintech teams often need to prove Pix transfer intake, DICT lookup behavior, fra
 - manual review resolution for review-threshold transfers
 - idempotent settlement callback handling with SPI message and callback-hash guards
 - CloudEvents-like outbox records for downstream systems
+- versioned PostgreSQL migrations plus leased SPI/outbox worker claims
 - structured JSON logs, request ID, correlation ID, Prometheus metrics, and OpenTelemetry spans
 - health and readiness probes
 
@@ -72,19 +73,19 @@ Detailed domain evidence lives in [docs/domain](docs/domain), and the senior cas
 
 The HTTP contract is versioned under `/v1` and documented in [openapi.yaml](openapi.yaml). Examples live in [docs/api/request-response-examples.md](docs/api/request-response-examples.md), and the shared error envelope is documented in [docs/api/error-format.md](docs/api/error-format.md).
 
-Authentication accepts either `Authorization: Bearer <api-key>` or `X-API-Key: <api-key>`. Local development seeds `dev-secret` for tenant `tenant_demo`; production requires `PIXRAIL_API_KEYS`.
+Authentication accepts either `Authorization: Bearer <api-key>` or `X-API-Key: <api-key>`. API keys are role-scoped: `tenant` keys create/read transfers, `worker` keys submit accepted transfers to SPI, `risk` keys resolve manual reviews, and `provider` keys send settlement callbacks. Local development seeds `dev-secret`, `worker-secret`, `risk-secret`, and `provider-secret` for tenant `tenant_demo`; production requires `PIXRAIL_API_KEYS`.
 
 ## Async or event architecture
 
 Every accepted transfer writes events to an outbox in the same logical transaction as the transfer state. Create does not call SPI before this durable write; it records `accepted` plus `spi_submission_requested`, then SPI submission records `approved` with SPI identifiers. Events use the envelope documented in [docs/events/README.md](docs/events/README.md) and include `event_id`, `event_type`, `schema_version`, `occurred_at`, `producer`, `tenant_id`, `account_id`, `pix_transfer_id`, and `correlation_id`.
 
-The messaging topology defines a payment rail exchange, routing key, consumer queue, retry queue, dead-letter exchange, dead-letter queue, idempotency header, and correlation header in code and documentation. The relay drains pending outbox records, publishes them through a publisher interface, marks acknowledgements, and schedules failed publishes for retry. Consumers must deduplicate by `event_id` and preserve account-level ordering.
+The messaging topology defines a payment rail exchange, routing key, consumer queue, retry queue, dead-letter exchange, dead-letter queue, idempotency header, and correlation header in code and documentation. The relay claims pending outbox rows with a lease, publishes them through a publisher interface, marks acknowledgements only when the claim token matches, and schedules failed publishes for retry. Consumers must deduplicate by `event_id` and preserve account-level ordering.
 
 ## Database design
 
-The local default uses an in-memory repository so tests and simple demos have no external dependency. Production mode requires `PIXRAIL_STORE_DRIVER=postgres` and `PIXRAIL_DATABASE_URL`. The PostgreSQL migration lives in [db/migrations/0001_pixrail_core.sql](db/migrations/0001_pixrail_core.sql), the migration runner is [cmd/pixrail-migrate](cmd/pixrail-migrate), and the adapter is implemented under [internal/postgres](internal/postgres).
+The local default uses an in-memory repository so tests and simple demos have no external dependency. Production mode requires `PIXRAIL_STORE_DRIVER=postgres` and `PIXRAIL_DATABASE_URL`. PostgreSQL migrations are versioned under [db/migrations](db/migrations), the checksum-validating migration runner is [cmd/pixrail-migrate](cmd/pixrail-migrate), and the adapter is implemented under [internal/postgres](internal/postgres).
 
-Transaction boundary: transfer state, request fingerprint, decision audit, and outbox inserts are committed together. SPI submission happens only after a persisted accepted transfer exists. Settlement callbacks are guarded by SPI message ID, callback hash, and terminal-state checks.
+Transaction boundary: transfer state, request fingerprint, decision audit, and outbox inserts are committed together. SPI submission happens only after a persisted accepted transfer exists and a worker claim has been stored. Settlement callbacks are guarded by SPI message ID, callback hash, and terminal-state checks.
 
 ## Testing strategy
 
@@ -115,7 +116,7 @@ PixRail exposes:
 
 ## Security considerations
 
-Security coverage is documented in [docs/security/threat-model.md](docs/security/threat-model.md), [docs/security/authorization-matrix.md](docs/security/authorization-matrix.md), [docs/security/abuse-cases.md](docs/security/abuse-cases.md), [docs/security/data-classification.md](docs/security/data-classification.md), and [docs/security/secrets.md](docs/security/secrets.md). The implementation covers API key authentication, tenant isolation, idempotency, rate limiting, input validation, audit logging, correlation IDs, production config guards, and environment-based secret configuration.
+Security coverage is documented in [docs/security/threat-model.md](docs/security/threat-model.md), [docs/security/authorization-matrix.md](docs/security/authorization-matrix.md), [docs/security/abuse-cases.md](docs/security/abuse-cases.md), [docs/security/data-classification.md](docs/security/data-classification.md), and [docs/security/secrets.md](docs/security/secrets.md). The implementation covers role-scoped API key authentication, tenant isolation, idempotency, rate limiting, input validation, audit logging, correlation IDs, production config guards, and environment-based secret configuration.
 
 ## Trade-offs and decisions
 
@@ -132,7 +133,7 @@ Spec-driven readiness evidence is maintained in [docs/spec-driven](docs/spec-dri
 go run ./cmd/pixrail-api
 ```
 
-The local API listens on `:8080` and accepts `dev-secret`.
+The local API listens on `:8080` and seeds four role-scoped demo keys: `dev-secret` (`tenant`), `worker-secret` (`worker`), `risk-secret` (`risk`), and `provider-secret` (`provider`).
 
 ```sh
 curl -s http://localhost:8080/healthz
@@ -147,7 +148,7 @@ The create response is `accepted` and intentionally has no SPI identifiers yet. 
 
 ```sh
 curl -s -X POST http://localhost:8080/v1/pix/transfers/{id}/spi-submissions \
-  -H 'Authorization: Bearer dev-secret'
+  -H 'Authorization: Bearer worker-secret'
 ```
 
 Compose is available for production-like process wiring:
@@ -156,19 +157,19 @@ Compose is available for production-like process wiring:
 docker compose -f compose.yaml up --build
 ```
 
-To run against PostgreSQL, apply [db/migrations/0001_pixrail_core.sql](db/migrations/0001_pixrail_core.sql) and start with:
+To run against PostgreSQL, apply the versioned migrations with `pixrail-migrate` and start with:
 
 ```sh
 PIXRAIL_STORE_DRIVER=postgres \
 PIXRAIL_HTTP_ADDR=:18080 \
 PIXRAIL_DATABASE_URL=postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable \
-PIXRAIL_API_KEYS=tenant_demo:dev-secret \
+PIXRAIL_API_KEYS=tenant_demo:dev-secret:tenant,tenant_demo:worker-secret:worker,tenant_demo:risk-secret:risk,tenant_demo:provider-secret:provider \
 go run ./cmd/pixrail-api
 ```
 
 The Compose path starts PostgreSQL, applies the migration with `pixrail-migrate`, then boots the API with `PIXRAIL_STORE_DRIVER=postgres`.
 
-To apply the migration manually:
+To apply the migrations manually:
 
 ```sh
 PIXRAIL_DATABASE_URL='postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable' \
@@ -194,6 +195,7 @@ PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:15432/pixrail?ss
 ## Failure scenarios
 
 - missing or invalid API key returns `401`
+- valid API key without the endpoint role returns `403`
 - missing idempotency key or invalid payload returns `400`
 - tenant/account bucket exhaustion returns `429`
 - DICT missing or timeout simulation returns dependency failure
@@ -201,11 +203,11 @@ PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:15432/pixrail?ss
 - duplicate transfer requests replay the original response without new events
 - duplicate transfer requests with a different payload return `409`
 - duplicate terminal SPI callbacks replay only when the callback hash matches
+- active SPI or outbox leases prevent concurrent workers from duplicating the same local work item
 - wrong tenant cannot read another tenant transfer
 
 ## Roadmap
 
-- add PostgreSQL integration tests with a disposable database
 - add Redis-backed distributed rate limiting
 - add broker-backed publisher for the existing outbox relay
 - add provider adapters for real DICT, antifraud, and SPI integrations

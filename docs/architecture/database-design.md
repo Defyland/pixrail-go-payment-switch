@@ -1,101 +1,60 @@
 # Database Design
 
-The current implementation supports an in-memory store for local execution and tests plus a PostgreSQL adapter for durable payment-rail state. The authoritative migration is `db/migrations/0001_pixrail_core.sql`.
+The current implementation supports an in-memory store for local execution and tests plus a PostgreSQL adapter for durable payment-rail state. PostgreSQL migrations are versioned under `db/migrations/` and applied by `go run ./cmd/pixrail-migrate`.
+
+## Migration Discipline
+
+- `schema_migrations` records the migration version, file name, SHA-256 checksum, and application timestamp.
+- Migrations are applied in sorted filename order inside one transaction per migration.
+- Previously applied checksums are validated on every run; applied migration files are immutable.
+- New schema changes must use a new `NNNN_description.sql` file. Do not edit applied migrations.
+
+Current migrations:
+
+| Version | File | Purpose |
+| --- | --- | --- |
+| `0001` | `0001_pixrail_core.sql` | Core transfers, outbox, audit, and processed callback tables. |
+| `0002` | `0002_consistency_hardening.sql` | Forward-compatible consistency columns for databases created before request hashes and callback hashes. |
+| `0003` | `0003_worker_leases.sql` | SPI submission and outbox claim leases for multi-worker safety. |
 
 ## Tables
 
-```sql
-create table pix_transfers (
-  id text primary key,
-  tenant_id text not null,
-  account_id text not null,
-  idempotency_key text not null,
-  request_hash text not null,
-  correlation_id text not null,
-  end_to_end_id text unique,
-  amount_cents bigint not null check (amount_cents > 0),
-  currency text not null check (currency = 'BRL'),
-  receiver_key text not null,
-  receiver_key_type text not null,
-  receiver_name text not null,
-  receiver_bank text not null,
-  receiver_risk integer not null,
-  fraud_score integer not null,
-  fraud_rules jsonb not null default '[]',
-  status text not null,
-  decision_reason text not null,
-  spi_message_id text unique,
-  settlement_code text not null default '',
-  created_at timestamptz not null,
-  updated_at timestamptz not null,
-  unique (tenant_id, idempotency_key)
-);
+Core tables:
 
-create index pix_transfers_tenant_account_created_idx
-  on pix_transfers (tenant_id, account_id, created_at desc);
+- `pix_transfers`: tenant-scoped transfer state, idempotency key, request hash, fraud decision, SPI identifiers, SPI claim lease, settlement status, and timestamps.
+- `payment_outbox`: durable event envelope, publish status, retry evidence, and relay claim lease.
+- `audit_records`: immutable operational evidence for transfer decisions, review actions, SPI submission recording, and settlement callbacks.
+- `processed_spi_callbacks`: callback hash dedupe keyed by tenant, SPI message ID, and callback hash.
+- `schema_migrations`: migration runner metadata and checksum guard.
 
-create index pix_transfers_pending_spi_idx
-  on pix_transfers (created_at asc)
-  where status = 'accepted' and spi_message_id is null;
+Key constraints and indexes:
 
-create table payment_outbox (
-  sequence bigserial primary key,
-  event_id text not null unique,
-  event_type text not null,
-  schema_version text not null,
-  occurred_at timestamptz not null,
-  producer text not null,
-  tenant_id text not null,
-  account_id text not null,
-  pix_transfer_id text not null references pix_transfers(id),
-  correlation_id text not null,
-  payload jsonb not null,
-  published boolean not null default false,
-  available_at timestamptz not null,
-  attempts integer not null default 0,
-  last_error text not null default '',
-  dispatched_at timestamptz
-);
+- `unique (tenant_id, idempotency_key)` prevents duplicate transfer creation per tenant.
+- `end_to_end_id` and `spi_message_id` are unique when present.
+- `processed_spi_callbacks` prevents duplicate callback hashes and rejects conflicting terminal callbacks.
+- `pix_transfers_spi_claim_idx` supports scanning unsubmitted accepted transfers whose claim lease expired.
+- `payment_outbox_claim_idx` supports concurrent relay workers claiming available records.
 
-create index payment_outbox_pending_idx
-  on payment_outbox (available_at, sequence)
-  where published = false;
+## Transaction Boundaries
 
-create table audit_records (
-  id bigserial primary key,
-  tenant_id text not null,
-  account_id text not null,
-  pix_transfer_id text not null references pix_transfers(id),
-  action text not null,
-  correlation_id text not null,
-  metadata jsonb not null,
-  created_at timestamptz not null
-);
-
-create table processed_spi_callbacks (
-  tenant_id text not null,
-  spi_message_id text not null,
-  callback_hash text not null,
-  processed_at timestamptz not null,
-  primary key (tenant_id, spi_message_id, callback_hash)
-);
-```
-
-## Transaction boundaries
-
-- Create transfer: insert transfer, audit record, and all outbox events in one transaction.
-- SPI submission: load an already accepted transfer, submit through the idempotent SPI port, then persist SPI identifiers and approval events in one transaction.
+- Create transfer: insert transfer, request hash, audit record, and outbox events in one transaction.
+- SPI claim: lock the accepted transfer, store `spi_claim_token`, `spi_claimed_until`, increment submission attempts, and clear previous SPI error before calling the SPI client.
+- SPI submission record: lock the transfer again and persist SPI identifiers, approval events, and audit only when the worker claim token matches.
+- SPI submission release: on SPI client error, clear the token, retain last error, and move `spi_claimed_until` to the retry time.
 - Manual review: lock and transition a `review` transfer to `accepted` or `blocked`, with audit and outbox evidence.
-- Settlement callback: lock transfer by tenant and ID, validate SPI message ID, guard terminal states, update transfer, insert audit record, and insert settlement event.
-- Outbox relay: publish pending events, then mark `published = true` and `dispatched_at` after publisher acknowledgement. Failures increment attempts, retain `last_error`, and move `available_at` forward.
-- Migration runner: `go run ./cmd/pixrail-migrate` applies the core schema against `PIXRAIL_DATABASE_URL`.
+- Settlement callback: lock transfer by tenant and ID, validate SPI message ID, guard terminal states, update transfer, insert audit, insert settlement event, and persist callback hash.
+- Outbox relay: claim available records with `FOR UPDATE SKIP LOCKED`, publish through the publisher port, then mark `published` or schedule retry only when the claim token still matches.
+- Migration runner: apply each migration transactionally against `PIXRAIL_DATABASE_URL`.
 
-## Isolation and rollback
+## Isolation and Rollback
 
-Default `READ COMMITTED` is acceptable with unique constraints and row-level locks on SPI submission, review, and settlement updates. Failed DICT or fraud calls happen before the transaction, so no partial transfer row is written. Create never calls SPI; failed outbox insert rolls back the transfer decision. Settlement callback replay is guarded by `processed_spi_callbacks.callback_hash` so a different terminal callback payload is a conflict.
+Default `READ COMMITTED` is acceptable because state transitions use unique constraints, row-level locks, and claim tokens. Failed DICT or fraud calls happen before a transfer transaction, so no partial transfer row is written. Create never calls SPI. Failed outbox insert rolls back the transfer decision. Settlement callback replay is guarded by `processed_spi_callbacks.callback_hash`, so a different terminal callback payload is a conflict.
 
-## Runtime guardrails
+SPI submission is at-least-once at the service boundary and claim-protected locally. A real SPI adapter must pass a provider-supported idempotency key derived from the transfer ID; without an external provider contract, the local simulator provides deterministic message IDs and the service bounds submit time below the claim TTL.
+
+## Runtime Guardrails
 
 - `PIXRAIL_STORE_DRIVER=memory` is local/test only.
 - `PIXRAIL_STORE_DRIVER=postgres` requires `PIXRAIL_DATABASE_URL`.
-- `PIXRAIL_ENV=production` rejects memory storage.
+- `PIXRAIL_ENV=production` rejects memory storage and requires configured API keys.
+- `PIXRAIL_API_KEYS` should separate tenant, worker, risk, and provider roles.
