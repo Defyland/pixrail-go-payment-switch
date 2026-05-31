@@ -54,7 +54,8 @@ func TestTransferLifecycleRequestFlow(t *testing.T) {
 		t.Fatalf("expected 200 get, got %d: %s", getResponse.Code, getResponse.Body.String())
 	}
 
-	submit := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-submissions", `{}`, true)
+	submit := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-submissions", `{}`, false)
+	submit.Header.Set("Authorization", "Bearer worker-secret")
 	submitResponse := httptest.NewRecorder()
 	handler.ServeHTTP(submitResponse, submit)
 	if submitResponse.Code != http.StatusOK {
@@ -67,7 +68,8 @@ func TestTransferLifecycleRequestFlow(t *testing.T) {
 	}
 
 	settlePayload := `{"spi_message_id":"` + spiMessageID + `","status":"accepted","code":"ACSC"}`
-	settle := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", settlePayload, true)
+	settle := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", settlePayload, false)
+	settle.Header.Set("Authorization", "Bearer provider-secret")
 	settleResponse := httptest.NewRecorder()
 	handler.ServeHTTP(settleResponse, settle)
 	if settleResponse.Code != http.StatusOK {
@@ -88,6 +90,56 @@ func TestAuthRequired(t *testing.T) {
 
 	if resp.Code != http.StatusUnauthorized {
 		t.Fatalf("expected unauthorized, got %d", resp.Code)
+	}
+}
+
+func TestOperationalEndpointsRequireDedicatedRoles(t *testing.T) {
+	handler := newTestHandler(20)
+	create := request(handler, http.MethodPost, "/v1/pix/transfers", `{"account_id":"acct_123","amount_cents":12345,"currency":"BRL","receiver_key":"receiver@example.com","receiver_key_type":"EMAIL"}`, true)
+	create.Header.Set("Idempotency-Key", "idem-roles")
+	createResponse := httptest.NewRecorder()
+	handler.ServeHTTP(createResponse, create)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("expected create 201, got %d: %s", createResponse.Code, createResponse.Body.String())
+	}
+	transferID := decodeBody(t, createResponse.Body.Bytes())["data"].(map[string]any)["id"].(string)
+
+	submitAsTenant := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-submissions", `{}`, true)
+	submitAsTenantResponse := httptest.NewRecorder()
+	handler.ServeHTTP(submitAsTenantResponse, submitAsTenant)
+	if submitAsTenantResponse.Code != http.StatusForbidden {
+		t.Fatalf("expected tenant key to be forbidden on spi submission, got %d", submitAsTenantResponse.Code)
+	}
+
+	submitAsWorker := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-submissions", `{}`, false)
+	submitAsWorker.Header.Set("Authorization", "Bearer worker-secret")
+	submitAsWorkerResponse := httptest.NewRecorder()
+	handler.ServeHTTP(submitAsWorkerResponse, submitAsWorker)
+	if submitAsWorkerResponse.Code != http.StatusOK {
+		t.Fatalf("expected worker submit 200, got %d: %s", submitAsWorkerResponse.Code, submitAsWorkerResponse.Body.String())
+	}
+	submitted := decodeBody(t, submitAsWorkerResponse.Body.Bytes())["data"].(map[string]any)
+
+	callbackAsWorker := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", `{"spi_message_id":"`+submitted["spi_message_id"].(string)+`","status":"accepted","code":"ACSC"}`, false)
+	callbackAsWorker.Header.Set("Authorization", "Bearer worker-secret")
+	callbackAsWorkerResponse := httptest.NewRecorder()
+	handler.ServeHTTP(callbackAsWorkerResponse, callbackAsWorker)
+	if callbackAsWorkerResponse.Code != http.StatusForbidden {
+		t.Fatalf("expected worker key to be forbidden on provider callback, got %d", callbackAsWorkerResponse.Code)
+	}
+
+	reviewAsTenant := request(handler, http.MethodPost, "/v1/pix/transfers/missing/reviews", `{"decision":"approve"}`, true)
+	reviewAsTenantResponse := httptest.NewRecorder()
+	handler.ServeHTTP(reviewAsTenantResponse, reviewAsTenant)
+	if reviewAsTenantResponse.Code != http.StatusForbidden {
+		t.Fatalf("expected tenant key to be forbidden on review, got %d", reviewAsTenantResponse.Code)
+	}
+	reviewAsRisk := request(handler, http.MethodPost, "/v1/pix/transfers/missing/reviews", `{"decision":"approve"}`, false)
+	reviewAsRisk.Header.Set("Authorization", "Bearer risk-secret")
+	reviewAsRiskResponse := httptest.NewRecorder()
+	handler.ServeHTTP(reviewAsRiskResponse, reviewAsRisk)
+	if reviewAsRiskResponse.Code != http.StatusNotFound {
+		t.Fatalf("expected risk key to reach domain handler, got %d: %s", reviewAsRiskResponse.Code, reviewAsRiskResponse.Body.String())
 	}
 }
 
@@ -243,7 +295,12 @@ func TestCreateTransferLatencyBudget(t *testing.T) {
 }
 
 func newTestHandler(capacity int) http.Handler {
-	return newTestHandlerWithKeys(capacity, map[string]config.APIKey{"test-secret": {TenantID: "tenant_a", Secret: "test-secret"}})
+	return newTestHandlerWithKeys(capacity, map[string]config.APIKey{
+		"test-secret":     {TenantID: "tenant_a", Secret: "test-secret", Roles: map[config.APIKeyRole]bool{config.RoleTenant: true}},
+		"worker-secret":   {TenantID: "tenant_a", Secret: "worker-secret", Roles: map[config.APIKeyRole]bool{config.RoleWorker: true}},
+		"risk-secret":     {TenantID: "tenant_a", Secret: "risk-secret", Roles: map[config.APIKeyRole]bool{config.RoleRisk: true}},
+		"provider-secret": {TenantID: "tenant_a", Secret: "provider-secret", Roles: map[config.APIKeyRole]bool{config.RoleProvider: true}},
+	})
 }
 
 func newTestHandlerWithKeys(capacity int, keys map[string]config.APIKey) http.Handler {

@@ -49,6 +49,7 @@ paths:
   /v1/pix/transfers:
     post:
       summary: Create an idempotent Pix transfer
+      description: Requires an API key with the `tenant` role.
       operationId: createPixTransfer
       parameters:
         - name: Idempotency-Key
@@ -93,6 +94,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/RateLimited"
         "502":
@@ -100,6 +103,7 @@ paths:
   /v1/pix/transfers/{id}:
     get:
       summary: Fetch a tenant-scoped Pix transfer
+      description: Requires an API key with the `tenant` role.
       operationId: getPixTransfer
       parameters:
         - name: id
@@ -116,11 +120,14 @@ paths:
                 $ref: "#/components/schemas/TransferResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
   /v1/pix/transfers/{id}/spi-submissions:
     post:
       summary: Submit a persisted accepted transfer to the simulated SPI rail
+      description: Requires an API key with the `worker` role.
       operationId: submitPixTransferToSPI
       parameters:
         - name: id
@@ -137,6 +144,8 @@ paths:
                 $ref: "#/components/schemas/TransferResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -144,6 +153,7 @@ paths:
   /v1/pix/transfers/{id}/reviews:
     post:
       summary: Record a manual fraud review decision
+      description: Requires an API key with the `risk` role.
       operationId: recordPixTransferReview
       parameters:
         - name: id
@@ -168,6 +178,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -175,6 +187,7 @@ paths:
   /v1/pix/transfers/{id}/spi-callbacks:
     post:
       summary: Record a simulated SPI settlement callback
+      description: Requires an API key with the `provider` role.
       operationId: recordSPICallback
       parameters:
         - name: id
@@ -199,6 +212,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -206,12 +221,15 @@ paths:
   /v1/outbox:
     get:
       summary: Inspect tenant-authenticated outbox records for local operations
+      description: Requires an API key with the `tenant` role.
       operationId: listOutbox
       responses:
         "200":
           description: Outbox records.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 components:
   securitySchemes:
     bearerAuth:
@@ -230,6 +248,12 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     Unauthorized:
       description: API key is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: API key is valid but does not have the endpoint role.
       content:
         application/json:
           schema:

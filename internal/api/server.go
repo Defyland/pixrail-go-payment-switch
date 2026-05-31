@@ -61,12 +61,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /readyz", s.ready)
 	s.mux.HandleFunc("GET /metrics", s.metricsHandler)
-	s.mux.Handle("POST /v1/pix/transfers", s.auth(http.HandlerFunc(s.createTransfer)))
-	s.mux.Handle("GET /v1/pix/transfers/{id}", s.auth(http.HandlerFunc(s.getTransfer)))
-	s.mux.Handle("POST /v1/pix/transfers/{id}/spi-submissions", s.auth(http.HandlerFunc(s.submitToSPI)))
-	s.mux.Handle("POST /v1/pix/transfers/{id}/reviews", s.auth(http.HandlerFunc(s.recordReview)))
-	s.mux.Handle("POST /v1/pix/transfers/{id}/spi-callbacks", s.auth(http.HandlerFunc(s.recordSettlement)))
-	s.mux.Handle("GET /v1/outbox", s.auth(http.HandlerFunc(s.outbox)))
+	s.mux.Handle("POST /v1/pix/transfers", s.authRole(config.RoleTenant, http.HandlerFunc(s.createTransfer)))
+	s.mux.Handle("GET /v1/pix/transfers/{id}", s.authRole(config.RoleTenant, http.HandlerFunc(s.getTransfer)))
+	s.mux.Handle("POST /v1/pix/transfers/{id}/spi-submissions", s.authRole(config.RoleWorker, http.HandlerFunc(s.submitToSPI)))
+	s.mux.Handle("POST /v1/pix/transfers/{id}/reviews", s.authRole(config.RoleRisk, http.HandlerFunc(s.recordReview)))
+	s.mux.Handle("POST /v1/pix/transfers/{id}/spi-callbacks", s.authRole(config.RoleProvider, http.HandlerFunc(s.recordSettlement)))
+	s.mux.Handle("GET /v1/outbox", s.authRole(config.RoleTenant, http.HandlerFunc(s.outbox)))
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -229,7 +229,7 @@ func (s *Server) outbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": filtered})
 }
 
-func (s *Server) auth(next http.Handler) http.Handler {
+func (s *Server) authRole(role config.APIKeyRole, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if token == "" {
@@ -238,6 +238,10 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		key, ok := s.keys[token]
 		if !ok {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "valid API key is required", nil)
+			return
+		}
+		if !key.HasRole(role) {
+			writeError(w, http.StatusForbidden, "forbidden", "API key is not allowed to access this endpoint", nil)
 			return
 		}
 		ctx := context.WithValue(r.Context(), tenantKey, key.TenantID)

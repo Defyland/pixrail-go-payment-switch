@@ -11,6 +11,23 @@ import (
 type APIKey struct {
 	TenantID string
 	Secret   string
+	Roles    map[APIKeyRole]bool
+}
+
+type APIKeyRole string
+
+const (
+	RoleTenant   APIKeyRole = "tenant"
+	RoleWorker   APIKeyRole = "worker"
+	RoleRisk     APIKeyRole = "risk"
+	RoleProvider APIKeyRole = "provider"
+)
+
+func (k APIKey) HasRole(role APIKeyRole) bool {
+	if len(k.Roles) == 0 {
+		return role == RoleTenant
+	}
+	return k.Roles[role]
 }
 
 type Config struct {
@@ -50,7 +67,10 @@ func Load() (Config, error) {
 		if cfg.RequireConfiguredSecrets {
 			return Config{}, fmt.Errorf("PIXRAIL_API_KEYS is required in production")
 		}
-		keys["dev-secret"] = APIKey{TenantID: "tenant_demo", Secret: "dev-secret"}
+		keys["dev-secret"] = APIKey{TenantID: "tenant_demo", Secret: "dev-secret", Roles: roleSet(RoleTenant)}
+		keys["worker-secret"] = APIKey{TenantID: "tenant_demo", Secret: "worker-secret", Roles: roleSet(RoleWorker)}
+		keys["risk-secret"] = APIKey{TenantID: "tenant_demo", Secret: "risk-secret", Roles: roleSet(RoleRisk)}
+		keys["provider-secret"] = APIKey{TenantID: "tenant_demo", Secret: "provider-secret", Roles: roleSet(RoleProvider)}
 	}
 	if cfg.StoreDriver != "memory" && cfg.StoreDriver != "postgres" {
 		return Config{}, fmt.Errorf("PIXRAIL_STORE_DRIVER must be memory or postgres")
@@ -82,15 +102,52 @@ func parseAPIKeys(raw string) (map[string]APIKey, error) {
 		return keys, nil
 	}
 	for _, pair := range strings.Split(raw, ",") {
-		parts := strings.SplitN(strings.TrimSpace(pair), ":", 2)
+		parts := strings.SplitN(strings.TrimSpace(pair), ":", 3)
 		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-			return nil, fmt.Errorf("invalid PIXRAIL_API_KEYS entry %q, expected tenant_id:secret", pair)
+			if len(parts) != 3 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" || strings.TrimSpace(parts[2]) == "" {
+				return nil, fmt.Errorf("invalid PIXRAIL_API_KEYS entry %q, expected tenant_id:secret[:role|role]", pair)
+			}
+		}
+		roles := roleSet(RoleTenant)
+		if len(parts) == 3 {
+			parsedRoles, err := parseRoles(parts[2])
+			if err != nil {
+				return nil, err
+			}
+			roles = parsedRoles
 		}
 		tenantID := strings.TrimSpace(parts[0])
 		secret := strings.TrimSpace(parts[1])
-		keys[secret] = APIKey{TenantID: tenantID, Secret: secret}
+		if _, exists := keys[secret]; exists {
+			return nil, fmt.Errorf("duplicate PIXRAIL_API_KEYS secret for tenant %q", tenantID)
+		}
+		keys[secret] = APIKey{TenantID: tenantID, Secret: secret, Roles: roles}
 	}
 	return keys, nil
+}
+
+func parseRoles(raw string) (map[APIKeyRole]bool, error) {
+	roles := make(map[APIKeyRole]bool)
+	for _, role := range strings.Split(raw, "|") {
+		switch parsed := APIKeyRole(strings.TrimSpace(role)); parsed {
+		case RoleTenant, RoleWorker, RoleRisk, RoleProvider:
+			roles[parsed] = true
+		default:
+			return nil, fmt.Errorf("invalid PIXRAIL_API_KEYS role %q", role)
+		}
+	}
+	if len(roles) == 0 {
+		return nil, fmt.Errorf("PIXRAIL_API_KEYS role list cannot be empty")
+	}
+	return roles, nil
+}
+
+func roleSet(roles ...APIKeyRole) map[APIKeyRole]bool {
+	set := make(map[APIKeyRole]bool, len(roles))
+	for _, role := range roles {
+		set[role] = true
+	}
+	return set
 }
 
 func getenv(key, fallback string) string {

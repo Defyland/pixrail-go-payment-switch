@@ -13,11 +13,36 @@ func TestParseAPIKeys(t *testing.T) {
 	if keys["secret-b"].TenantID != "tenant_b" {
 		t.Fatalf("unexpected tenant mapping: %+v", keys["secret-b"])
 	}
+	if !keys["secret-a"].HasRole(RoleTenant) || keys["secret-a"].HasRole(RoleWorker) {
+		t.Fatalf("expected legacy key syntax to grant tenant role only: %+v", keys["secret-a"])
+	}
+}
+
+func TestParseAPIKeysWithRoles(t *testing.T) {
+	keys, err := parseAPIKeys("tenant_a:tenant-secret:tenant,tenant_a:worker-secret:worker,tenant_a:ops-secret:worker|provider")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if !keys["tenant-secret"].HasRole(RoleTenant) || keys["tenant-secret"].HasRole(RoleWorker) {
+		t.Fatalf("expected tenant role only, got %+v", keys["tenant-secret"])
+	}
+	if !keys["worker-secret"].HasRole(RoleWorker) || keys["worker-secret"].HasRole(RoleProvider) {
+		t.Fatalf("expected worker role only, got %+v", keys["worker-secret"])
+	}
+	if !keys["ops-secret"].HasRole(RoleWorker) || !keys["ops-secret"].HasRole(RoleProvider) {
+		t.Fatalf("expected multi-role ops key, got %+v", keys["ops-secret"])
+	}
 }
 
 func TestParseAPIKeysRejectsMalformedEntries(t *testing.T) {
 	if _, err := parseAPIKeys("tenant-only"); err == nil {
 		t.Fatal("expected malformed key error")
+	}
+	if _, err := parseAPIKeys("tenant_a:secret:admin"); err == nil {
+		t.Fatal("expected unknown role error")
+	}
+	if _, err := parseAPIKeys("tenant_a:shared:tenant,tenant_b:shared:tenant"); err == nil {
+		t.Fatal("expected duplicate secret error")
 	}
 }
 
@@ -38,8 +63,11 @@ func TestLoadProvidesDevelopmentKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
-	if cfg.APIKeys["dev-secret"].TenantID != "tenant_demo" {
+	if cfg.APIKeys["dev-secret"].TenantID != "tenant_demo" || !cfg.APIKeys["dev-secret"].HasRole(RoleTenant) {
 		t.Fatalf("expected development API key, got %+v", cfg.APIKeys)
+	}
+	if !cfg.APIKeys["worker-secret"].HasRole(RoleWorker) || !cfg.APIKeys["risk-secret"].HasRole(RoleRisk) || !cfg.APIKeys["provider-secret"].HasRole(RoleProvider) {
+		t.Fatalf("expected role-separated development API keys, got %+v", cfg.APIKeys)
 	}
 }
 
