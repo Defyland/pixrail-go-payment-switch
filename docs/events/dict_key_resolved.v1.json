@@ -14,7 +14,16 @@
     "account_id": { "type": "string" },
     "pix_transfer_id": { "type": "string" },
     "correlation_id": { "type": "string" },
-    "payload": { "type": "object" }
+    "payload": {
+      "type": "object",
+      "required": ["receiver_id", "receiver_bank", "risk_signal"],
+      "properties": {
+        "receiver_id": { "type": "string", "minLength": 1 },
+        "receiver_bank": { "type": "string", "minLength": 1 },
+        "risk_signal": { "type": "integer", "minimum": 0, "maximum": 100 }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

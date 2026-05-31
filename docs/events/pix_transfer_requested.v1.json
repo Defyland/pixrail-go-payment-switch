@@ -14,7 +14,16 @@
     "account_id": { "type": "string" },
     "pix_transfer_id": { "type": "string" },
     "correlation_id": { "type": "string" },
-    "payload": { "type": "object" }
+    "payload": {
+      "type": "object",
+      "required": ["amount_cents", "currency", "receiver_key_type"],
+      "properties": {
+        "amount_cents": { "type": "integer", "minimum": 1 },
+        "currency": { "type": "string", "const": "BRL" },
+        "receiver_key_type": { "type": "string", "enum": ["CPF", "CNPJ", "EMAIL", "PHONE", "EVP"] }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

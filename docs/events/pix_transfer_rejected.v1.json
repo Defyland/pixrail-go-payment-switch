@@ -22,7 +22,7 @@
         "status": { "type": "string", "const": "rejected" },
         "code": { "type": "string" }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

@@ -14,7 +14,14 @@
     "account_id": { "type": "string" },
     "pix_transfer_id": { "type": "string" },
     "correlation_id": { "type": "string" },
-    "payload": { "type": "object" }
+    "payload": {
+      "type": "object",
+      "required": ["decision_reason"],
+      "properties": {
+        "decision_reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

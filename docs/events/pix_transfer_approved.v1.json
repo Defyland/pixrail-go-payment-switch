@@ -14,7 +14,16 @@
     "account_id": { "type": "string" },
     "pix_transfer_id": { "type": "string" },
     "correlation_id": { "type": "string" },
-    "payload": { "type": "object" }
+    "payload": {
+      "type": "object",
+      "required": ["end_to_end_id", "spi_message_id", "decision_reason"],
+      "properties": {
+        "end_to_end_id": { "type": "string", "minLength": 1 },
+        "spi_message_id": { "type": "string", "minLength": 1 },
+        "decision_reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

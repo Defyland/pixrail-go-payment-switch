@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,6 +120,54 @@ func TestEventSchemasUseRequiredEnvelopeFields(t *testing.T) {
 		for _, field := range required {
 			if !strings.Contains(schema, field) {
 				t.Fatalf("schema %s missing envelope field %s", match, field)
+			}
+		}
+	}
+}
+
+func TestEventSchemasDeclareStrictPayloadContracts(t *testing.T) {
+	root := "../.."
+	expectedRequired := map[string][]string{
+		"dict_key_resolved.v1.json":             {"receiver_id", "receiver_bank", "risk_signal"},
+		"fraud_score_calculated.v1.json":        {"score", "status", "rules"},
+		"pix_transfer_accepted.v1.json":         {"decision_reason"},
+		"pix_transfer_approved.v1.json":         {"end_to_end_id", "spi_message_id", "decision_reason"},
+		"pix_transfer_blocked.v1.json":          {"score", "rules", "decision_reason"},
+		"pix_transfer_rejected.v1.json":         {"spi_message_id", "status", "code"},
+		"pix_transfer_requested.v1.json":        {"amount_cents", "currency", "receiver_key_type"},
+		"pix_transfer_review_approved.v1.json":  {"decision", "reason"},
+		"pix_transfer_review_blocked.v1.json":   {"decision", "reason"},
+		"pix_transfer_review_requested.v1.json": {"score", "rules", "decision_reason"},
+		"pix_transfer_settled.v1.json":          {"spi_message_id", "status", "code"},
+		"spi_message_created.v1.json":           {"spi_message_id", "end_to_end_id"},
+		"spi_submission_requested.v1.json":      {"request_hash"},
+	}
+
+	for file, requiredFields := range expectedRequired {
+		raw, err := os.ReadFile(filepath.Join(root, "docs/events", file))
+		if err != nil {
+			t.Fatalf("read schema %s: %v", file, err)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatalf("schema %s is invalid json: %v", file, err)
+		}
+		properties := schema["properties"].(map[string]any)
+		payload := properties["payload"].(map[string]any)
+		if payload["additionalProperties"] != false {
+			t.Fatalf("schema %s payload must reject undeclared fields", file)
+		}
+		required, ok := payload["required"].([]any)
+		if !ok || len(required) == 0 {
+			t.Fatalf("schema %s payload must declare required fields", file)
+		}
+		requiredSet := make(map[string]bool, len(required))
+		for _, field := range required {
+			requiredSet[field.(string)] = true
+		}
+		for _, field := range requiredFields {
+			if !requiredSet[field] {
+				t.Fatalf("schema %s payload missing required field %s", file, field)
 			}
 		}
 	}
