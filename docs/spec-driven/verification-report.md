@@ -4,17 +4,19 @@
 
 PixRail was updated against `specs/general-project-spec.md`, `specs/senior-engineering-rubric.md`, and `specs/spec-driven-senior-quality.md`.
 
-The repository now has the required spec-driven documents, product and domain evidence, engineering case study, scalability and operational-cost analysis, expanded architecture views, checksum-validated PostgreSQL migrations, dependency-backed readiness, claim-protected outbox relay behavior, claim-protected SPI submission, a long-running SPI worker process, role-scoped API keys, HMAC-signed provider callbacks, strict event payload schemas, request-fingerprint idempotency, callback-hash settlement replay, executable review resolution, configurable trace exporting, runtime metrics, optional pprof, explicit PostgreSQL pool configuration, serialization benchmarks, Redis-like cache codecs, rate-limiting strategy benchmarks, k6 evidence, and updated repository conformance tests.
+The repository now has the required spec-driven documents, product and domain evidence, engineering case study, scalability and operational-cost analysis, expanded architecture views, explicit Go Modular Monolith/Hexagonal documentation, executable dependency-rule tests, checksum-validated PostgreSQL migrations, dependency-backed readiness, claim-protected outbox relay behavior, claim-protected SPI submission, a long-running SPI worker process, role-scoped API keys, HMAC-signed provider callbacks, strict event payload schemas, request-fingerprint idempotency, callback-hash settlement replay, executable review resolution, configurable trace exporting, runtime metrics, optional pprof, explicit PostgreSQL pool configuration, serialization benchmarks, Redis-like cache codecs, rate-limiting strategy benchmarks, k6 evidence, and updated repository conformance tests.
 
 ## Commands Run
 
 | Command | Result | Evidence |
 | --- | --- | --- |
 | `go test ./...` | Passed | All packages green, including `internal/postgres`, `internal/messaging`, `internal/observability`, and `internal/spec`. |
+| `go test ./internal/spec` | Passed | Repository artifact checks and architecture dependency-rule checks passed. |
+| `go test ./internal/rail ./internal/switcher ./internal/store ./internal/postgres` | Passed | Domain state machine, use case, memory adapter, and PostgreSQL adapter tests passed after boundary hardening. |
 | `go test ./...` after worker, event-schema, and docs hardening | Passed | All packages green after `cmd/pixrail-worker`, strict event payload schemas, and repository spec updates. |
 | `go test -race ./...` | Passed | Race-enabled suite passed across all packages. |
 | `go vet ./...` | Passed | No vet findings. |
-| `npx --yes @redocly/cli lint openapi.yaml` | Passed | OpenAPI validated in 24 ms with no warnings. |
+| `npx --yes @redocly/cli lint openapi.yaml` | Passed | OpenAPI validated in 20 ms with no warnings. |
 | `go run golang.org/x/vuln/cmd/govulncheck@latest ./...` | Passed | `No vulnerabilities found.` |
 | `docker compose -f compose.yaml config` | Passed | Compose rendered successfully after API, worker, and callback-secret wiring; generated config had 112 lines. |
 | `go test -bench=. -benchmem ./internal/api` | Passed | `BenchmarkCreateTransfer-10 43267 27636 ns/op 27998 B/op 221 allocs/op`. |
@@ -35,7 +37,11 @@ The repository now has the required spec-driven documents, product and domain ev
 - README points to product, domain, spec-driven, case study, scalability, and operational-cost evidence.
 - Product docs cover problem, personas, use cases, non-goals, roadmap, and plan framing.
 - Domain docs cover glossary, bounded contexts, aggregates, invariants, and state machines.
-- Architecture docs include overview, C4 context, C4 container, module boundaries, sequence diagrams, deployment view, and ADRs.
+- Architecture docs include overview, C4 context, C4 container, ports/adapters, Go architecture, dependency rule, module boundaries, testing strategy, sequence diagrams, deployment view, and ADRs.
+- PixRail is explicitly documented and tested as a Go modular monolith with Hexagonal/Ports & Adapters boundaries, not MVC renamed.
+- `internal/switcher` declares application ports and imports only domain/event packages.
+- `internal/rail` owns transfer validation, fingerprints, audit evidence shape, and payment state transitions without importing infra.
+- HTTP DTOs stay inside `internal/api`; database/cache models stay in adapters.
 - PostgreSQL migration exists with unique idempotency, event, and SPI constraints.
 - PostgreSQL migrations are versioned and checksum-validated through `schema_migrations`.
 - Request fingerprint is stored and mismatched idempotency replay returns conflict.

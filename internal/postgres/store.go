@@ -9,7 +9,6 @@ import (
 
 	"github.com/Defyland/pixrail-go-payment-switch/internal/events"
 	"github.com/Defyland/pixrail-go-payment-switch/internal/rail"
-	"github.com/Defyland/pixrail-go-payment-switch/internal/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -73,7 +72,7 @@ func (s *Store) FindByIdempotency(ctx context.Context, tenantID, key string) (ra
 	return transfer, true, nil
 }
 
-func (s *Store) InsertTransfer(ctx context.Context, transfer rail.Transfer, outbox []events.Event, audit []store.AuditRecord) error {
+func (s *Store) InsertTransfer(ctx context.Context, transfer rail.Transfer, outbox []events.Event, audit []rail.AuditRecord) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -106,9 +105,6 @@ func (s *Store) GetTransfer(ctx context.Context, tenantID, transferID string) (r
 }
 
 func (s *Store) ClaimSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, claimUntil time.Time) (rail.Transfer, bool, error) {
-	if claimToken == "" || !claimUntil.After(time.Now().UTC()) {
-		return rail.Transfer{}, false, fmt.Errorf("%w: valid spi claim token and expiry are required", rail.ErrValidation)
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return rail.Transfer{}, false, err
@@ -126,20 +122,12 @@ func (s *Store) ClaimSPISubmission(ctx context.Context, tenantID string, transfe
 	if transfer.Status == rail.StatusApproved && transfer.SPIMessageID != "" {
 		return transfer, true, tx.Commit(ctx)
 	}
-	if transfer.Status != rail.StatusAccepted {
-		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not pending SPI submission", rail.ErrConflict)
-	}
-	if transfer.SPIClaimedUntil != nil && transfer.SPIClaimedUntil.After(time.Now().UTC()) {
-		return rail.Transfer{}, false, fmt.Errorf("%w: transfer already claimed for SPI submission", rail.ErrConflict)
-	}
 
-	expiresAt := claimUntil.UTC()
 	updatedAt := time.Now().UTC()
-	transfer.SPIClaimToken = claimToken
-	transfer.SPIClaimedUntil = &expiresAt
-	transfer.SPISubmissionAttempts++
-	transfer.SPILastError = ""
-	transfer.UpdatedAt = updatedAt
+	transfer, err = transfer.ClaimSPISubmission(claimToken, claimUntil, updatedAt)
+	if err != nil {
+		return rail.Transfer{}, false, err
+	}
 	if _, err := tx.Exec(ctx, `
 		update pix_transfers
 		   set spi_claim_token = $1,
@@ -148,13 +136,13 @@ func (s *Store) ClaimSPISubmission(ctx context.Context, tenantID string, transfe
 		       spi_last_error = '',
 		       updated_at = $3
 		 where tenant_id = $4 and id = $5`,
-		claimToken, expiresAt, updatedAt, tenantID, transferID); err != nil {
+		transfer.SPIClaimToken, transfer.SPIClaimedUntil, transfer.UpdatedAt, tenantID, transferID); err != nil {
 		return rail.Transfer{}, false, translatePgError(err)
 	}
 	return transfer, false, tx.Commit(ctx)
 }
 
-func (s *Store) RecordSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, message rail.SPIMessage, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error) {
+func (s *Store) RecordSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, message rail.SPIMessage, outbox []events.Event, audit rail.AuditRecord) (rail.Transfer, bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return rail.Transfer{}, false, err
@@ -172,22 +160,10 @@ func (s *Store) RecordSPISubmission(ctx context.Context, tenantID string, transf
 	if transfer.Status == rail.StatusApproved && transfer.SPIMessageID == message.MessageID {
 		return transfer, true, tx.Commit(ctx)
 	}
-	if transfer.Status != rail.StatusAccepted {
-		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not pending SPI submission", rail.ErrConflict)
+	transfer, err = transfer.RecordSPISubmission(claimToken, message)
+	if err != nil {
+		return rail.Transfer{}, false, err
 	}
-	if transfer.SPIClaimToken == "" || transfer.SPIClaimToken != claimToken {
-		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not claimed by this SPI worker", rail.ErrConflict)
-	}
-	if message.MessageID == "" || message.EndToEndID == "" {
-		return rail.Transfer{}, false, fmt.Errorf("%w: spi identifiers are required", rail.ErrValidation)
-	}
-	transfer.Status = rail.StatusApproved
-	transfer.SPIMessageID = message.MessageID
-	transfer.EndToEndID = message.EndToEndID
-	transfer.SPIClaimToken = ""
-	transfer.SPIClaimedUntil = nil
-	transfer.SPILastError = ""
-	transfer.UpdatedAt = message.SubmittedAt.UTC()
 	if _, err := tx.Exec(ctx, `
 		update pix_transfers
 		   set status = $1,
@@ -230,10 +206,10 @@ func (s *Store) ReleaseSPISubmission(ctx context.Context, tenantID string, trans
 	if transfer.Status == rail.StatusApproved && transfer.SPIMessageID != "" {
 		return tx.Commit(ctx)
 	}
-	if transfer.SPIClaimToken == "" || transfer.SPIClaimToken != claimToken {
-		return fmt.Errorf("%w: transfer is not claimed by this SPI worker", rail.ErrConflict)
+	transfer, err = transfer.ReleaseSPISubmission(claimToken, lastError, retryAt, time.Now().UTC())
+	if err != nil {
+		return err
 	}
-	availableAt := retryAt.UTC()
 	if _, err := tx.Exec(ctx, `
 		update pix_transfers
 		   set spi_claim_token = '',
@@ -241,13 +217,13 @@ func (s *Store) ReleaseSPISubmission(ctx context.Context, tenantID string, trans
 		       spi_last_error = $2,
 		       updated_at = $3
 		 where tenant_id = $4 and id = $5`,
-		availableAt, lastError, time.Now().UTC(), tenantID, transferID); err != nil {
+		transfer.SPIClaimedUntil, transfer.SPILastError, transfer.UpdatedAt, tenantID, transferID); err != nil {
 		return translatePgError(err)
 	}
 	return tx.Commit(ctx)
 }
 
-func (s *Store) RecordReviewDecision(ctx context.Context, tenantID string, transferID string, status rail.TransferStatus, reason string, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, error) {
+func (s *Store) RecordReviewDecision(ctx context.Context, tenantID string, transferID string, status rail.TransferStatus, reason string, outbox []events.Event, audit rail.AuditRecord) (rail.Transfer, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return rail.Transfer{}, err
@@ -262,19 +238,10 @@ func (s *Store) RecordReviewDecision(ctx context.Context, tenantID string, trans
 	if err != nil {
 		return rail.Transfer{}, err
 	}
-	if transfer.Status != rail.StatusReview {
-		return rail.Transfer{}, fmt.Errorf("%w: transfer is not waiting for review", rail.ErrConflict)
+	transfer, err = transfer.RecordReviewDecision(status, reason, audit.CreatedAt)
+	if err != nil {
+		return rail.Transfer{}, err
 	}
-	switch status {
-	case rail.StatusAccepted, rail.StatusBlocked:
-	default:
-		return rail.Transfer{}, fmt.Errorf("%w: review can only accept or block", rail.ErrValidation)
-	}
-	transfer.Status = status
-	if reason != "" {
-		transfer.DecisionReason = reason
-	}
-	transfer.UpdatedAt = audit.CreatedAt.UTC()
 	if _, err := tx.Exec(ctx, `
 		update pix_transfers
 		   set status = $1, decision_reason = $2, updated_at = $3
@@ -293,7 +260,7 @@ func (s *Store) RecordReviewDecision(ctx context.Context, tenantID string, trans
 	return transfer, tx.Commit(ctx)
 }
 
-func (s *Store) UpdateSettlement(ctx context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error) {
+func (s *Store) UpdateSettlement(ctx context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit rail.AuditRecord) (rail.Transfer, bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return rail.Transfer{}, false, err
@@ -307,9 +274,6 @@ func (s *Store) UpdateSettlement(ctx context.Context, tenantID string, transferI
 	}
 	if err != nil {
 		return rail.Transfer{}, false, err
-	}
-	if transfer.SPIMessageID == "" || transfer.SPIMessageID != callback.SPIMessageID {
-		return rail.Transfer{}, false, fmt.Errorf("%w: spi_message_id mismatch", rail.ErrConflict)
 	}
 	callbackHash := callback.CallbackHash
 	if callbackHash == "" {
@@ -330,22 +294,10 @@ func (s *Store) UpdateSettlement(ctx context.Context, tenantID string, transferI
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return rail.Transfer{}, false, err
 	}
-	if transfer.Status.Terminal() {
-		return rail.Transfer{}, false, fmt.Errorf("%w: terminal transfer has no matching callback hash", rail.ErrConflict)
+	transfer, err = transfer.RecordSettlement(callback)
+	if err != nil {
+		return rail.Transfer{}, false, err
 	}
-	if transfer.Status != rail.StatusApproved {
-		return rail.Transfer{}, false, fmt.Errorf("%w: transfer is not approved for settlement callback", rail.ErrConflict)
-	}
-	switch callback.Status {
-	case rail.SettlementAccepted:
-		transfer.Status = rail.StatusSettled
-	case rail.SettlementRejected:
-		transfer.Status = rail.StatusRejected
-	default:
-		return rail.Transfer{}, false, fmt.Errorf("%w: unsupported settlement status", rail.ErrValidation)
-	}
-	transfer.SettlementCode = callback.Code
-	transfer.UpdatedAt = callback.ReceivedAt.UTC()
 	if _, err := tx.Exec(ctx, `
 		update pix_transfers
 		   set status = $1, settlement_code = $2, updated_at = $3
@@ -383,7 +335,7 @@ func (s *Store) Outbox(ctx context.Context) ([]events.OutboxRecord, error) {
 	return records, rows.Err()
 }
 
-func (s *Store) Audit(ctx context.Context) ([]store.AuditRecord, error) {
+func (s *Store) Audit(ctx context.Context) ([]rail.AuditRecord, error) {
 	rows, err := s.pool.Query(ctx, `
 		select tenant_id, account_id, pix_transfer_id, action, correlation_id, metadata, created_at
 		  from audit_records
@@ -393,9 +345,9 @@ func (s *Store) Audit(ctx context.Context) ([]store.AuditRecord, error) {
 	}
 	defer rows.Close()
 
-	var records []store.AuditRecord
+	var records []rail.AuditRecord
 	for rows.Next() {
-		var record store.AuditRecord
+		var record rail.AuditRecord
 		var metadata []byte
 		if err := rows.Scan(&record.TenantID, &record.AccountID, &record.TransferID, &record.Action, &record.CorrelationID, &metadata, &record.CreatedAt); err != nil {
 			return nil, err
@@ -628,7 +580,7 @@ func insertOutbox(ctx context.Context, tx pgx.Tx, event events.Event) error {
 	return err
 }
 
-func insertAudit(ctx context.Context, tx pgx.Tx, record store.AuditRecord) error {
+func insertAudit(ctx context.Context, tx pgx.Tx, record rail.AuditRecord) error {
 	metadata, err := json.Marshal(record.Metadata)
 	if err != nil {
 		return err

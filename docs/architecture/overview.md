@@ -2,6 +2,8 @@
 
 PixRail is a payment switch optimized for the transfer decision hot path. It keeps product behavior close to production concerns while avoiding external dependencies in the local MVP.
 
+Architecturally, PixRail is a Go modular monolith with Hexagonal/Ports & Adapters boundaries. It is not MVC renamed: HTTP, CLI, and worker processes are adapters; `internal/switcher` owns use case orchestration; `internal/rail` owns domain invariants and payment state transitions; persistence/provider/cache/broker implementations are replaceable adapters.
+
 ## Runtime modules
 
 | Module | Responsibility |
@@ -14,6 +16,14 @@ PixRail is a payment switch optimized for the transfer decision hot path. It kee
 | Store | transfer state, idempotency index, outbox, audit log |
 | SPI worker | long-running polling process for accepted transfers that need SPI submission |
 | Observability | logs, metrics, traces, health, readiness |
+
+Detailed architecture docs:
+
+- [Ports and Adapters](ports-and-adapters.md)
+- [Go Architecture](go-architecture.md)
+- [Dependency Rule](dependency-rule.md)
+- [Module Boundaries](module-boundaries.md)
+- [Testing Strategy](testing-strategy.md)
 
 ## Boundaries
 

@@ -34,7 +34,9 @@ Fintech teams often need to prove Pix transfer intake, DICT lookup behavior, fra
 
 ## Architecture overview
 
-PixRail is a modular monolith with explicit ports for DICT, antifraud, SPI, storage, rate limiting, and event publishing. The local runtime can use in-memory adapters so the product is runnable without cloud dependencies; the production path uses PostgreSQL for transfer, audit, and outbox durability, and keeps Redis/broker adapters as the next deployment hardening step.
+PixRail is a Go modular monolith with Hexagonal/Ports & Adapters boundaries and pragmatic DDD. It is not MVC renamed: HTTP/CLI/workers are primary adapters, `internal/switcher` contains payment-switch use cases and ports, `internal/rail` owns transfer invariants and state transitions, and `internal/postgres`, `internal/store`, `internal/dict`, `internal/fraud`, `internal/spi`, `internal/ratelimit`, `internal/codec`, and `internal/observability` are replaceable adapters/support modules.
+
+The local runtime can use in-memory adapters so the product is runnable without cloud dependencies; the production path uses PostgreSQL for transfer, audit, and outbox durability, and keeps Redis/broker adapters as the next deployment hardening step. The dependency rule is executable in `internal/spec/architecture_spec_test.go`.
 
 ```text
 Tenant API -> HTTP API -> Payment Switch -> DICT Resolver
@@ -45,6 +47,8 @@ Tenant API -> HTTP API -> Payment Switch -> DICT Resolver
 ```
 
 The switch owns payment-rail state only. Settlement, ledger entries, balances, reconciliation, and financial reporting remain outside this service.
+
+Architecture details live in [docs/architecture/ports-and-adapters.md](docs/architecture/ports-and-adapters.md), [docs/architecture/go-architecture.md](docs/architecture/go-architecture.md), [docs/architecture/dependency-rule.md](docs/architecture/dependency-rule.md), [docs/architecture/module-boundaries.md](docs/architecture/module-boundaries.md), and [docs/architecture/testing-strategy.md](docs/architecture/testing-strategy.md).
 
 ## Tech stack
 
@@ -95,8 +99,8 @@ The suite uses Go `testing` and `httptest`:
 - unit tests for validation, rate limiting, DICT simulation, fraud rules, and messaging topology
 - API/request tests for auth, validation, lifecycle, metrics, and rate-limit failure
 - store tests for idempotency and tenant isolation
-- service tests for accepted, SPI-submitted, review, blocked, idempotent replay, and settlement flows
-- repository spec tests for required docs, OpenAPI, benchmark artifacts, and event schema envelope coverage
+- service/use case tests for accepted, SPI-submitted, review, blocked, idempotent replay, settlement flows, and fake-port orchestration
+- repository and architecture spec tests for required docs, dependency rule, OpenAPI, benchmark artifacts, and event schema envelope coverage
 - native benchmark for transfer creation hot path
 
 ## Performance benchmarks
@@ -125,6 +129,7 @@ Security coverage is documented in [docs/security/threat-model.md](docs/security
 
 - PixRail is a payment rail, not the ledger; see [ADR 0001](docs/adr/0001-payment-rail-boundary-before-financial-core.md).
 - A modular monolith is used before microservices because the hot path needs clear local transaction boundaries first.
+- Ports are declared by the use cases, not by adapters, so HTTP, PostgreSQL, DICT, fraud, SPI, Redis-like cache, and broker implementations remain replaceable.
 - In-memory adapters are accepted for local development; PostgreSQL is the durable store path, while Redis and broker adapters are the next production-hardening slice.
 - Full Event Sourcing, Kubernetes, service mesh, CDC, and data-lake analytics are deferred until provider integrations and persistence are real.
 

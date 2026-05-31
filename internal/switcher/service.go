@@ -9,37 +9,48 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Defyland/pixrail-go-payment-switch/internal/dict"
 	"github.com/Defyland/pixrail-go-payment-switch/internal/events"
-	"github.com/Defyland/pixrail-go-payment-switch/internal/fraud"
 	"github.com/Defyland/pixrail-go-payment-switch/internal/rail"
-	"github.com/Defyland/pixrail-go-payment-switch/internal/ratelimit"
-	"github.com/Defyland/pixrail-go-payment-switch/internal/spi"
-	"github.com/Defyland/pixrail-go-payment-switch/internal/store"
 )
 
 type Store interface {
 	Health(ctx context.Context) error
 	FindByIdempotency(ctx context.Context, tenantID, key string) (rail.Transfer, bool, error)
-	InsertTransfer(ctx context.Context, transfer rail.Transfer, outbox []events.Event, audit []store.AuditRecord) error
+	InsertTransfer(ctx context.Context, transfer rail.Transfer, outbox []events.Event, audit []rail.AuditRecord) error
 	GetTransfer(ctx context.Context, tenantID, transferID string) (rail.Transfer, error)
 	ClaimSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, claimUntil time.Time) (rail.Transfer, bool, error)
-	RecordSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, message rail.SPIMessage, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error)
+	RecordSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, message rail.SPIMessage, outbox []events.Event, audit rail.AuditRecord) (rail.Transfer, bool, error)
 	ReleaseSPISubmission(ctx context.Context, tenantID string, transferID string, claimToken string, lastError string, retryAt time.Time) error
-	RecordReviewDecision(ctx context.Context, tenantID string, transferID string, status rail.TransferStatus, reason string, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, error)
-	UpdateSettlement(ctx context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit store.AuditRecord) (rail.Transfer, bool, error)
+	RecordReviewDecision(ctx context.Context, tenantID string, transferID string, status rail.TransferStatus, reason string, outbox []events.Event, audit rail.AuditRecord) (rail.Transfer, error)
+	UpdateSettlement(ctx context.Context, tenantID string, transferID string, callback rail.SettlementCallback, outbox []events.Event, audit rail.AuditRecord) (rail.Transfer, bool, error)
 	PendingSPISubmissions(ctx context.Context, limit int) ([]rail.Transfer, error)
 	Outbox(ctx context.Context) ([]events.OutboxRecord, error)
-	Audit(ctx context.Context) ([]store.AuditRecord, error)
+	Audit(ctx context.Context) ([]rail.AuditRecord, error)
+}
+
+type ParticipantResolver interface {
+	Resolve(ctx context.Context, tenantID string, key string, keyType rail.DictKeyType) (rail.DictEntry, error)
+}
+
+type FraudScorer interface {
+	Score(ctx context.Context, transfer rail.CreateTransferRequest, dict rail.DictEntry) (rail.FraudDecision, error)
+}
+
+type SPIClient interface {
+	Submit(ctx context.Context, transfer rail.Transfer) (rail.SPIMessage, error)
+}
+
+type RateLimiter interface {
+	Allow(key string) bool
 }
 
 type Service struct {
 	store       Store
-	dict        dict.Resolver
-	fraud       fraud.Engine
-	spi         spi.Client
-	tenantLimit *ratelimit.Limiter
-	dictLimit   *ratelimit.Limiter
+	dict        ParticipantResolver
+	fraud       FraudScorer
+	spi         SPIClient
+	tenantLimit RateLimiter
+	dictLimit   RateLimiter
 	now         func() time.Time
 }
 
@@ -61,7 +72,7 @@ const (
 	spiSubmitTimeout = 10 * time.Second
 )
 
-func NewService(store Store, dictResolver dict.Resolver, fraudEngine fraud.Engine, spiClient spi.Client, tenantLimit *ratelimit.Limiter, dictLimit *ratelimit.Limiter) *Service {
+func NewService(store Store, dictResolver ParticipantResolver, fraudEngine FraudScorer, spiClient SPIClient, tenantLimit RateLimiter, dictLimit RateLimiter) *Service {
 	return &Service{
 		store:       store,
 		dict:        dictResolver,
@@ -191,7 +202,7 @@ func (s *Service) CreateTransfer(ctx context.Context, req rail.CreateTransferReq
 		})
 	}
 
-	audit := []store.AuditRecord{{
+	audit := []rail.AuditRecord{{
 		TenantID:      transfer.TenantID,
 		AccountID:     transfer.AccountID,
 		TransferID:    transfer.ID,
@@ -280,7 +291,7 @@ func (s *Service) SubmitToSPI(ctx context.Context, tenantID, transferID, correla
 		_ = s.store.ReleaseSPISubmission(ctx, tenantID, transferID, claimToken, err.Error(), s.now().UTC().Add(time.Second))
 		return Result{}, err
 	}
-	audit := store.AuditRecord{
+	audit := rail.AuditRecord{
 		TenantID:      current.TenantID,
 		AccountID:     current.AccountID,
 		TransferID:    current.ID,
@@ -394,7 +405,7 @@ func (s *Service) RecordReview(ctx context.Context, req rail.ReviewDecisionReque
 			return Result{}, err
 		}
 	}
-	audit := store.AuditRecord{
+	audit := rail.AuditRecord{
 		TenantID:      current.TenantID,
 		AccountID:     current.AccountID,
 		TransferID:    current.ID,
@@ -452,7 +463,7 @@ func (s *Service) RecordSettlement(ctx context.Context, callback rail.Settlement
 	if err != nil {
 		return Result{}, err
 	}
-	audit := store.AuditRecord{
+	audit := rail.AuditRecord{
 		TenantID:      current.TenantID,
 		AccountID:     current.AccountID,
 		TransferID:    current.ID,
@@ -478,7 +489,7 @@ func (s *Service) Outbox(ctx context.Context) ([]events.OutboxRecord, error) {
 	return s.store.Outbox(ctx)
 }
 
-func (s *Service) Audit(ctx context.Context) ([]store.AuditRecord, error) {
+func (s *Service) Audit(ctx context.Context) ([]rail.AuditRecord, error) {
 	return s.store.Audit(ctx)
 }
 

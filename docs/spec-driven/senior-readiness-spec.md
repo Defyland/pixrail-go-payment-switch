@@ -13,6 +13,7 @@ The domain evidence must define payment-rail language, bounded contexts, aggrega
 ## Architecture Bar
 
 The architecture must justify a modular monolith with explicit ports for DICT, fraud, SPI, storage, rate limiting, observability, and outbox publishing. It must include deployment view, module boundaries, sequence flows, and rejected alternatives.
+PixRail must not read as MVC with renamed folders: primary adapters must stay thin, use cases must declare ports and orchestrate application behavior, the domain must own transfer/payment state transitions, and secondary adapters must remain replaceable.
 
 ## API Bar
 
@@ -75,6 +76,10 @@ The project must run Go tests, race tests, vet, OpenAPI validation, security sca
 | Aggregates and invariants are explicit | `docs/domain/aggregates.md`, `docs/domain/invariants.md`, `internal/switcher/service_test.go` | Done | Invariants include idempotency, tenant isolation, terminal callbacks. |
 | State machine is documented and tested | `docs/domain/state-machines.md`, `internal/switcher/service_test.go`, `internal/store/memory_test.go` | Done | Transfer states map to `rail.TransferStatus`. |
 | API contract is versioned and validated | `openapi.yaml`, `docs/api/request-response-examples.md`, Redocly lint | Done | Includes auth and failure examples. |
+| Go architecture is explicitly not MVC | `docs/architecture/ports-and-adapters.md`, `docs/architecture/go-architecture.md`, `docs/architecture/dependency-rule.md`, `docs/architecture/testing-strategy.md` | Done | Documents Modular Monolith, Hexagonal/Ports & Adapters, primary adapters, use cases, domain, ports, and secondary adapters. |
+| Dependency rule is executable | `internal/spec/architecture_spec_test.go` | Done | Fails if domain imports internal infra, if `switcher` imports adapters, or if HTTP imports persistence/provider/cache adapters. |
+| Use cases depend on ports, not concrete adapters | `internal/switcher/service.go`, `internal/app/runtime.go` | Done | `switcher` declares `Store`, `ParticipantResolver`, `FraudScorer`, `SPIClient`, and `RateLimiter`; `app` wires concrete implementations. |
+| Domain owns payment state transitions | `internal/rail/model.go`, `internal/rail/model_test.go` | Done | SPI claim/submission, review decisions, and settlement transitions are tested without HTTP or database. |
 | Data consistency boundaries are documented | `docs/architecture/database-design.md`, `db/migrations/`, `cmd/pixrail-migrate` | Done | PostgreSQL schema is versioned and checksum-validated; local runtime can still use memory. |
 | Create does not perform pre-persist SPI side effects | `internal/switcher/service.go`, `internal/switcher/service_test.go` | Done | `CreateTransfer` stores `accepted` and `spi_submission_requested`; `SubmitToSPI` records SPI identifiers later. |
 | SPI work is claim-protected | `internal/switcher/service.go`, `internal/store/memory.go`, `internal/postgres/store.go`, `db/migrations/0003_worker_leases.sql` | Done | Accepted transfers are claimed before SPI side effects; claim tokens are checked before approval persistence. |

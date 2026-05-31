@@ -6,10 +6,6 @@ import (
 	"github.com/Defyland/pixrail-go-payment-switch/internal/rail"
 )
 
-type Engine interface {
-	Score(ctx context.Context, transfer rail.CreateTransferRequest, dict rail.DictEntry) (rail.FraudDecision, error)
-}
-
 type RulesEngine struct{}
 
 func (RulesEngine) Score(_ context.Context, transfer rail.CreateTransferRequest, dict rail.DictEntry) (rail.FraudDecision, error) {

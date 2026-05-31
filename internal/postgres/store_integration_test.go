@@ -8,7 +8,6 @@ import (
 
 	"github.com/Defyland/pixrail-go-payment-switch/internal/events"
 	"github.com/Defyland/pixrail-go-payment-switch/internal/rail"
-	storepkg "github.com/Defyland/pixrail-go-payment-switch/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -65,7 +64,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 		t.Fatalf("event: %v", err)
 	}
 
-	if err := store.InsertTransfer(ctx, transfer, []events.Event{event}, []storepkg.AuditRecord{{
+	if err := store.InsertTransfer(ctx, transfer, []events.Event{event}, []rail.AuditRecord{{
 		TenantID:      transfer.TenantID,
 		AccountID:     transfer.AccountID,
 		TransferID:    transfer.ID,
@@ -115,7 +114,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spi event: %v", err)
 	}
-	approved, replay, err := store.RecordSPISubmission(ctx, transfer.TenantID, transfer.ID, claimedSPI.SPIClaimToken, message, []events.Event{spiEvent}, storepkg.AuditRecord{
+	approved, replay, err := store.RecordSPISubmission(ctx, transfer.TenantID, transfer.ID, claimedSPI.SPIClaimToken, message, []events.Event{spiEvent}, rail.AuditRecord{
 		TenantID:      transfer.TenantID,
 		AccountID:     transfer.AccountID,
 		TransferID:    transfer.ID,
@@ -144,7 +143,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settlement event: %v", err)
 	}
-	settled, replay, err := store.UpdateSettlement(ctx, transfer.TenantID, transfer.ID, callback, []events.Event{settlementEvent}, storepkg.AuditRecord{
+	settled, replay, err := store.UpdateSettlement(ctx, transfer.TenantID, transfer.ID, callback, []events.Event{settlementEvent}, rail.AuditRecord{
 		TenantID:      transfer.TenantID,
 		AccountID:     transfer.AccountID,
 		TransferID:    transfer.ID,
@@ -159,7 +158,7 @@ func TestPostgresStoreIntegration(t *testing.T) {
 	if replay || settled.Status != rail.StatusSettled {
 		t.Fatalf("expected settled transfer, replay=%v transfer=%+v", replay, settled)
 	}
-	_, replay, err = store.UpdateSettlement(ctx, transfer.TenantID, transfer.ID, callback, nil, storepkg.AuditRecord{})
+	_, replay, err = store.UpdateSettlement(ctx, transfer.TenantID, transfer.ID, callback, nil, rail.AuditRecord{})
 	if err != nil {
 		t.Fatalf("settlement replay: %v", err)
 	}

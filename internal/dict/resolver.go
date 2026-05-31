@@ -11,10 +11,6 @@ import (
 	"github.com/Defyland/pixrail-go-payment-switch/internal/rail"
 )
 
-type Resolver interface {
-	Resolve(ctx context.Context, tenantID string, key string, keyType rail.DictKeyType) (rail.DictEntry, error)
-}
-
 type StaticResolver struct {
 	Latency       time.Duration
 	TimeoutSignal time.Duration

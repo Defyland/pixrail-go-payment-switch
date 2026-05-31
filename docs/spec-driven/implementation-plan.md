@@ -26,6 +26,8 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - executable rate-limiting strategies with recommendations
 - Go runtime/container hardening evidence
 - trace-buffering guidance without pretending local Kafka/Redpanda exists
+- explicit Modular Monolith, Hexagonal/Ports & Adapters, and pragmatic DDD boundaries
+- dependency-rule tests proving PixRail is not MVC renamed
 
 ## Files to Create or Update
 
@@ -59,7 +61,12 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 - `internal/ratelimit/*.go`
 - `internal/observability/metrics.go`
 - `internal/app/pprof.go`
+- `internal/spec/architecture_spec_test.go`
 - `internal/spec/repository_spec_test.go`
+- `docs/architecture/ports-and-adapters.md`
+- `docs/architecture/go-architecture.md`
+- `docs/architecture/dependency-rule.md`
+- `docs/architecture/testing-strategy.md`
 - `docs/benchmarks/serialization.md`
 - `docs/rate-limiting.md`
 - `docs/runtime/gomaxprocs-kubernetes.md`
@@ -75,6 +82,10 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 | Domain model evidence is explicit | Add glossary, bounded contexts, aggregates, invariants, and state machine docs. |
 | Case study answers rubric | Add `docs/engineering-case-study.md` with the required table of contents. |
 | Data consistency is production-aware | Add PostgreSQL migration and update database design docs. |
+| Architecture is not MVC renamed | Document ports/adapters, Go architecture, module boundaries, and dependency rule. |
+| Use cases depend on ports | Declare ports in `internal/switcher` and wire concrete adapters only in `internal/app`. |
+| Domain owns state transitions | Move SPI/review/settlement transition rules into `internal/rail` and test them without persistence. |
+| Dependency rule is executable | Add spec tests that parse production imports and fail on boundary violations. |
 | Create is side-effect safe | Persist `accepted` transfer state before SPI submission; record SPI later through an explicit operation. |
 | External work is claim-protected | Add SPI and outbox leases with claim-token checked updates. |
 | Pending SPI work has an operational process | Add `cmd/pixrail-worker` and wire it into Compose. |
@@ -98,6 +109,7 @@ Apply the new senior spec-driven standards to PixRail while keeping work scoped 
 
 ```sh
 go test ./...
+go test ./internal/spec
 go test -race ./...
 PIXRAIL_POSTGRES_TEST_DSN=postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable go test -count=1 -run TestPostgresStoreIntegration -v ./internal/postgres
 go vet ./...

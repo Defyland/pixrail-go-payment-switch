@@ -9,10 +9,6 @@ import (
 	"github.com/Defyland/pixrail-go-payment-switch/internal/rail"
 )
 
-type Client interface {
-	Submit(ctx context.Context, transfer rail.Transfer) (rail.SPIMessage, error)
-}
-
 type Simulator struct{}
 
 func (Simulator) Submit(_ context.Context, transfer rail.Transfer) (rail.SPIMessage, error) {

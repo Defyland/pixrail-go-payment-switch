@@ -72,6 +72,16 @@ type Transfer struct {
 	UpdatedAt             time.Time
 }
 
+type AuditRecord struct {
+	TenantID      string
+	AccountID     string
+	TransferID    string
+	Action        string
+	CorrelationID string
+	Metadata      map[string]string
+	CreatedAt     time.Time
+}
+
 type DictEntry struct {
 	Key         string
 	KeyType     DictKeyType
@@ -206,6 +216,100 @@ func (c SettlementCallback) Fingerprint() string {
 
 func (s TransferStatus) Terminal() bool {
 	return s == StatusBlocked || s == StatusSettled || s == StatusRejected
+}
+
+func (t Transfer) ClaimSPISubmission(claimToken string, claimUntil time.Time, now time.Time) (Transfer, error) {
+	if strings.TrimSpace(claimToken) == "" || !claimUntil.After(now.UTC()) {
+		return Transfer{}, fmt.Errorf("%w: valid spi claim token and expiry are required", ErrValidation)
+	}
+	if t.Status != StatusAccepted {
+		return Transfer{}, fmt.Errorf("%w: transfer is not pending SPI submission", ErrConflict)
+	}
+	if t.SPIClaimedUntil != nil && t.SPIClaimedUntil.After(now.UTC()) {
+		return Transfer{}, fmt.Errorf("%w: transfer already claimed for SPI submission", ErrConflict)
+	}
+	expiresAt := claimUntil.UTC()
+	t.SPIClaimToken = claimToken
+	t.SPIClaimedUntil = &expiresAt
+	t.SPISubmissionAttempts++
+	t.SPILastError = ""
+	t.UpdatedAt = now.UTC()
+	return t, nil
+}
+
+func (t Transfer) RecordSPISubmission(claimToken string, message SPIMessage) (Transfer, error) {
+	if t.Status != StatusAccepted {
+		return Transfer{}, fmt.Errorf("%w: transfer is not pending SPI submission", ErrConflict)
+	}
+	if t.SPIClaimToken == "" || t.SPIClaimToken != claimToken {
+		return Transfer{}, fmt.Errorf("%w: transfer is not claimed by this SPI worker", ErrConflict)
+	}
+	if strings.TrimSpace(message.MessageID) == "" || strings.TrimSpace(message.EndToEndID) == "" {
+		return Transfer{}, fmt.Errorf("%w: spi identifiers are required", ErrValidation)
+	}
+	t.Status = StatusApproved
+	t.SPIMessageID = message.MessageID
+	t.EndToEndID = message.EndToEndID
+	t.SPIClaimToken = ""
+	t.SPIClaimedUntil = nil
+	t.SPILastError = ""
+	t.UpdatedAt = message.SubmittedAt.UTC()
+	return t, nil
+}
+
+func (t Transfer) ReleaseSPISubmission(claimToken string, lastError string, retryAt time.Time, now time.Time) (Transfer, error) {
+	if t.Status == StatusApproved && t.SPIMessageID != "" {
+		return t, nil
+	}
+	if t.SPIClaimToken == "" || t.SPIClaimToken != claimToken {
+		return Transfer{}, fmt.Errorf("%w: transfer is not claimed by this SPI worker", ErrConflict)
+	}
+	availableAt := retryAt.UTC()
+	t.SPIClaimToken = ""
+	t.SPIClaimedUntil = &availableAt
+	t.SPILastError = lastError
+	t.UpdatedAt = now.UTC()
+	return t, nil
+}
+
+func (t Transfer) RecordReviewDecision(status TransferStatus, reason string, reviewedAt time.Time) (Transfer, error) {
+	if t.Status != StatusReview {
+		return Transfer{}, fmt.Errorf("%w: transfer is not waiting for review", ErrConflict)
+	}
+	switch status {
+	case StatusAccepted, StatusBlocked:
+	default:
+		return Transfer{}, fmt.Errorf("%w: review can only accept or block", ErrValidation)
+	}
+	t.Status = status
+	if reason != "" {
+		t.DecisionReason = reason
+	}
+	t.UpdatedAt = reviewedAt.UTC()
+	return t, nil
+}
+
+func (t Transfer) RecordSettlement(callback SettlementCallback) (Transfer, error) {
+	if t.SPIMessageID == "" || t.SPIMessageID != callback.SPIMessageID {
+		return Transfer{}, fmt.Errorf("%w: spi_message_id mismatch", ErrConflict)
+	}
+	if t.Status.Terminal() {
+		return Transfer{}, fmt.Errorf("%w: terminal transfer has no matching callback hash", ErrConflict)
+	}
+	if t.Status != StatusApproved {
+		return Transfer{}, fmt.Errorf("%w: transfer is not approved for settlement callback", ErrConflict)
+	}
+	switch callback.Status {
+	case SettlementAccepted:
+		t.Status = StatusSettled
+	case SettlementRejected:
+		t.Status = StatusRejected
+	default:
+		return Transfer{}, fmt.Errorf("%w: unsupported settlement status", ErrValidation)
+	}
+	t.SettlementCode = callback.Code
+	t.UpdatedAt = callback.ReceivedAt.UTC()
+	return t, nil
 }
 
 func hashParts(parts ...string) string {

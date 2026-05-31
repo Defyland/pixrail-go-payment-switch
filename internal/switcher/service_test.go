@@ -72,6 +72,26 @@ func TestSubmitToSPIApprovesPersistedTransfer(t *testing.T) {
 	}
 }
 
+func TestCreateTransferOrchestratesThroughPorts(t *testing.T) {
+	spiClient := panicSPIClient{t: t}
+	service := NewService(
+		store.NewMemoryStore(),
+		fakeParticipantResolver{},
+		fakeFraudScorer{decision: rail.FraudDecision{Score: 12, Status: rail.StatusAccepted, Rules: []string{"fake_rule"}, Reason: "accepted by fake port"}},
+		spiClient,
+		allowAllLimiter{},
+		allowAllLimiter{},
+	)
+
+	result, err := service.CreateTransfer(context.Background(), validRequest())
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if result.Transfer.Status != rail.StatusAccepted || result.Transfer.ReceiverBank != "12345678" {
+		t.Fatalf("expected use case to map port outputs into transfer, got %+v", result.Transfer)
+	}
+}
+
 func TestSubmitToSPIClaimsBeforeCallingSPI(t *testing.T) {
 	memory := store.NewMemoryStore()
 	spiClient := &blockingSPIClient{entered: make(chan struct{}), release: make(chan struct{})}
@@ -302,7 +322,7 @@ func newTestService(capacity int) *Service {
 	return newTestServiceWithFraud(fraud.RulesEngine{}, capacity)
 }
 
-func newTestServiceWithFraud(fraudEngine fraud.Engine, capacity ...int) *Service {
+func newTestServiceWithFraud(fraudEngine FraudScorer, capacity ...int) *Service {
 	bucketCapacity := 10
 	if len(capacity) > 0 {
 		bucketCapacity = capacity[0]
@@ -326,6 +346,33 @@ func (reviewFraudEngine) Score(context.Context, rail.CreateTransferRequest, rail
 		Rules:  []string{"manual_review_fixture"},
 		Reason: "manual review required",
 	}, nil
+}
+
+type fakeParticipantResolver struct{}
+
+func (fakeParticipantResolver) Resolve(context.Context, string, string, rail.DictKeyType) (rail.DictEntry, error) {
+	return rail.DictEntry{
+		ReceiverID:  "dict_fake",
+		Name:        "Recebedor Fake",
+		BankISPB:    "12345678",
+		AccountHash: "receiver_hash",
+		RiskSignal:  12,
+		ResolvedAt:  time.Now().UTC(),
+	}, nil
+}
+
+type fakeFraudScorer struct {
+	decision rail.FraudDecision
+}
+
+func (s fakeFraudScorer) Score(context.Context, rail.CreateTransferRequest, rail.DictEntry) (rail.FraudDecision, error) {
+	return s.decision, nil
+}
+
+type allowAllLimiter struct{}
+
+func (allowAllLimiter) Allow(string) bool {
+	return true
 }
 
 type panicSPIClient struct {

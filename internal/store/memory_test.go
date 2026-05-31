@@ -58,7 +58,7 @@ func TestMemoryStoreUpdatesSettlementOnce(t *testing.T) {
 		ReceivedAt:   time.Now().UTC(),
 	}
 	callback.CallbackHash = callback.Fingerprint()
-	updated, replay, err := store.UpdateSettlement(ctx, "tenant_a", "pxt_1", callback, nil, AuditRecord{})
+	updated, replay, err := store.UpdateSettlement(ctx, "tenant_a", "pxt_1", callback, nil, rail.AuditRecord{})
 	if err != nil {
 		t.Fatalf("settlement failed: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestMemoryStoreUpdatesSettlementOnce(t *testing.T) {
 		t.Fatalf("expected settled, got %s", updated.Status)
 	}
 
-	replayed, replay, err := store.UpdateSettlement(ctx, "tenant_a", "pxt_1", callback, nil, AuditRecord{})
+	replayed, replay, err := store.UpdateSettlement(ctx, "tenant_a", "pxt_1", callback, nil, rail.AuditRecord{})
 	if err != nil {
 		t.Fatalf("terminal replay failed: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestMemoryStoreUpdatesSettlementOnce(t *testing.T) {
 		ReceivedAt:   time.Now().UTC(),
 	}
 	conflicting.CallbackHash = conflicting.Fingerprint()
-	if _, _, err := store.UpdateSettlement(ctx, "tenant_a", "pxt_1", conflicting, nil, AuditRecord{}); !errors.Is(err, rail.ErrConflict) {
+	if _, _, err := store.UpdateSettlement(ctx, "tenant_a", "pxt_1", conflicting, nil, rail.AuditRecord{}); !errors.Is(err, rail.ErrConflict) {
 		t.Fatalf("expected conflicting callback to fail, got %v", err)
 	}
 }
@@ -117,7 +117,7 @@ func TestMemoryStoreRecordsSPISubmissionAfterAcceptedTransfer(t *testing.T) {
 		MessageID:   "spi_1",
 		EndToEndID:  "E123",
 		SubmittedAt: time.Now().UTC(),
-	}, nil, AuditRecord{CreatedAt: time.Now().UTC()})
+	}, nil, rail.AuditRecord{CreatedAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatalf("record spi failed: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestMemoryStoreRecordsSPISubmissionAfterAcceptedTransfer(t *testing.T) {
 		MessageID:   "spi_1",
 		EndToEndID:  "E123",
 		SubmittedAt: time.Now().UTC(),
-	}, nil, AuditRecord{CreatedAt: time.Now().UTC()})
+	}, nil, rail.AuditRecord{CreatedAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatalf("replay spi failed: %v", err)
 	}
