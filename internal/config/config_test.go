@@ -147,3 +147,39 @@ func TestLoadRejectsUnknownTracingExporter(t *testing.T) {
 		t.Fatal("expected unknown tracing exporter to fail")
 	}
 }
+
+func TestLoadRejectsMalformedIntegerRuntimeConfig(t *testing.T) {
+	t.Setenv("PIXRAIL_WORKER_BATCH_SIZE", "abc")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected malformed integer runtime config to fail")
+	}
+}
+
+func TestLoadRejectsNonPositiveRuntimeConfig(t *testing.T) {
+	t.Setenv("PIXRAIL_WORKER_BATCH_SIZE", "0")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected non-positive worker batch size to fail")
+	}
+}
+
+func TestLoadRejectsMalformedDurationRuntimeConfig(t *testing.T) {
+	t.Setenv("PIXRAIL_WORKER_INTERVAL", "later")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected malformed duration runtime config to fail")
+	}
+}
+
+func TestLoadAllowsZeroPostgresMinConns(t *testing.T) {
+	t.Setenv("PIXRAIL_POSTGRES_MIN_CONNS", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if cfg.PostgresMinConns != 0 {
+		t.Fatalf("expected postgres min conns to remain zero, got %d", cfg.PostgresMinConns)
+	}
+}

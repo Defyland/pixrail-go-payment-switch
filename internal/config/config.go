@@ -54,23 +54,63 @@ type Config struct {
 
 func Load() (Config, error) {
 	env := getenv("PIXRAIL_ENV", "development")
+	postgresMinConns, err := getenvIntAtLeast("PIXRAIL_POSTGRES_MIN_CONNS", 0, 0)
+	if err != nil {
+		return Config{}, err
+	}
+	postgresMaxConns, err := getenvIntAtLeast("PIXRAIL_POSTGRES_MAX_CONNS", 10, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	postgresMaxConnLifetime, err := getenvDurationAtLeast("PIXRAIL_POSTGRES_MAX_CONN_LIFETIME", 30*time.Minute, time.Nanosecond)
+	if err != nil {
+		return Config{}, err
+	}
+	tenantBucketSize, err := getenvIntAtLeast("PIXRAIL_TENANT_BUCKET_SIZE", 120, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	dictBucketSize, err := getenvIntAtLeast("PIXRAIL_DICT_BUCKET_SIZE", 60, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	dictTimeout, err := getenvDurationAtLeast("PIXRAIL_DICT_TIMEOUT", 300*time.Millisecond, time.Nanosecond)
+	if err != nil {
+		return Config{}, err
+	}
+	workerBatchSize, err := getenvIntAtLeast("PIXRAIL_WORKER_BATCH_SIZE", 100, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	workerInterval, err := getenvDurationAtLeast("PIXRAIL_WORKER_INTERVAL", time.Second, time.Nanosecond)
+	if err != nil {
+		return Config{}, err
+	}
+	providerSignatureTolerance, err := getenvDurationAtLeast("PIXRAIL_PROVIDER_SIGNATURE_TOLERANCE", 5*time.Minute, time.Nanosecond)
+	if err != nil {
+		return Config{}, err
+	}
+	shutdownTimeout, err := getenvDurationAtLeast("PIXRAIL_SHUTDOWN_TIMEOUT", 5*time.Second, time.Nanosecond)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		Addr:                       getenv("PIXRAIL_HTTP_ADDR", ":8080"),
 		Environment:                env,
 		StoreDriver:                getenv("PIXRAIL_STORE_DRIVER", "memory"),
 		DatabaseURL:                getenv("PIXRAIL_DATABASE_URL", ""),
-		PostgresMinConns:           getenvInt("PIXRAIL_POSTGRES_MIN_CONNS", 0),
-		PostgresMaxConns:           getenvInt("PIXRAIL_POSTGRES_MAX_CONNS", 10),
-		PostgresMaxConnLifetime:    getenvDuration("PIXRAIL_POSTGRES_MAX_CONN_LIFETIME", 30*time.Minute),
-		TenantBucketSize:           getenvInt("PIXRAIL_TENANT_BUCKET_SIZE", 120),
-		DictBucketSize:             getenvInt("PIXRAIL_DICT_BUCKET_SIZE", 60),
-		DictTimeout:                getenvDuration("PIXRAIL_DICT_TIMEOUT", 300*time.Millisecond),
-		WorkerBatchSize:            getenvInt("PIXRAIL_WORKER_BATCH_SIZE", 100),
-		WorkerInterval:             getenvDuration("PIXRAIL_WORKER_INTERVAL", time.Second),
+		PostgresMinConns:           postgresMinConns,
+		PostgresMaxConns:           postgresMaxConns,
+		PostgresMaxConnLifetime:    postgresMaxConnLifetime,
+		TenantBucketSize:           tenantBucketSize,
+		DictBucketSize:             dictBucketSize,
+		DictTimeout:                dictTimeout,
+		WorkerBatchSize:            workerBatchSize,
+		WorkerInterval:             workerInterval,
 		ProviderCallbackSecret:     getenv("PIXRAIL_PROVIDER_CALLBACK_SECRET", defaultProviderCallbackSecret(env)),
-		ProviderSignatureTolerance: getenvDuration("PIXRAIL_PROVIDER_SIGNATURE_TOLERANCE", 5*time.Minute),
+		ProviderSignatureTolerance: providerSignatureTolerance,
 		PprofAddr:                  getenv("PIXRAIL_PPROF_ADDR", ""),
-		ShutdownTimeout:            getenvDuration("PIXRAIL_SHUTDOWN_TIMEOUT", 5*time.Second),
+		ShutdownTimeout:            shutdownTimeout,
 		RequireConfiguredSecrets:   env == "production",
 		TracingExporter:            getenv("PIXRAIL_TRACING_EXPORTER", defaultTracingExporter(env)),
 	}
@@ -183,26 +223,32 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
-func getenvInt(key string, fallback int) int {
+func getenvIntAtLeast(key string, fallback int, min int) (int, error) {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return fallback
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
-	return parsed
+	if parsed < min {
+		return 0, fmt.Errorf("%s must be >= %d", key, min)
+	}
+	return parsed, nil
 }
 
-func getenvDuration(key string, fallback time.Duration) time.Duration {
+func getenvDurationAtLeast(key string, fallback time.Duration, min time.Duration) (time.Duration, error) {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("%s must be a duration: %w", key, err)
 	}
-	return parsed
+	if parsed < min {
+		return 0, fmt.Errorf("%s must be >= %s", key, min)
+	}
+	return parsed, nil
 }
