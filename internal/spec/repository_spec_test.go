@@ -182,3 +182,39 @@ func TestEventSchemasDeclareStrictPayloadContracts(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPIProviderCallbackHeadersAreScopedToCallbackEndpoint(t *testing.T) {
+	raw, err := os.ReadFile("../../openapi.yaml")
+	if err != nil {
+		t.Fatalf("read openapi: %v", err)
+	}
+	spec := string(raw)
+
+	transferGet := openAPIPathBlock(t, spec, "/v1/pix/transfers/{id}:")
+	for _, header := range []string{"X-PixRail-Timestamp", "X-PixRail-Signature"} {
+		if strings.Contains(transferGet, header) {
+			t.Fatalf("GET /v1/pix/transfers/{id} must not require provider callback header %s", header)
+		}
+	}
+
+	callbackPost := openAPIPathBlock(t, spec, "/v1/pix/transfers/{id}/spi-callbacks:")
+	for _, header := range []string{"X-PixRail-Timestamp", "X-PixRail-Signature"} {
+		if !strings.Contains(callbackPost, header) {
+			t.Fatalf("POST /v1/pix/transfers/{id}/spi-callbacks must document provider callback header %s", header)
+		}
+	}
+}
+
+func openAPIPathBlock(t *testing.T, spec string, path string) string {
+	t.Helper()
+	start := strings.Index(spec, path)
+	if start == -1 {
+		t.Fatalf("openapi path %s not found", path)
+	}
+
+	block := spec[start:]
+	if next := strings.Index(block[1:], "\n  /"); next >= 0 {
+		return block[:next+1]
+	}
+	return block
+}

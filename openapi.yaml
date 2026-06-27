@@ -111,19 +111,6 @@ paths:
           required: true
           schema:
             type: string
-        - name: X-PixRail-Timestamp
-          in: header
-          required: true
-          schema:
-            type: string
-          description: Unix timestamp used in provider callback signature.
-        - name: X-PixRail-Signature
-          in: header
-          required: true
-          schema:
-            type: string
-            pattern: "^sha256=[a-f0-9]{64}$"
-          description: HMAC-SHA256 over `timestamp.body` using the provider callback secret.
       responses:
         "200":
           description: Transfer found.
@@ -208,6 +195,19 @@ paths:
           required: true
           schema:
             type: string
+        - name: X-PixRail-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Unix timestamp used in provider callback signature.
+        - name: X-PixRail-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: "^sha256=[a-f0-9]{64}$"
+          description: HMAC-SHA256 over `timestamp.body` using the provider callback secret.
       requestBody:
         required: true
         content:

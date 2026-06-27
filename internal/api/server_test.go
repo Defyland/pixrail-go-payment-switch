@@ -86,23 +86,7 @@ func TestTransferLifecycleRequestFlow(t *testing.T) {
 
 func TestProviderCallbackRequiresValidSignature(t *testing.T) {
 	handler := newTestHandler(20)
-	create := request(handler, http.MethodPost, "/v1/pix/transfers", `{"account_id":"acct_123","amount_cents":12345,"currency":"BRL","receiver_key":"receiver@example.com","receiver_key_type":"EMAIL"}`, true)
-	create.Header.Set("Idempotency-Key", "idem-provider-signature")
-	createResponse := httptest.NewRecorder()
-	handler.ServeHTTP(createResponse, create)
-	if createResponse.Code != http.StatusCreated {
-		t.Fatalf("expected create 201, got %d: %s", createResponse.Code, createResponse.Body.String())
-	}
-	transferID := decodeBody(t, createResponse.Body.Bytes())["data"].(map[string]any)["id"].(string)
-
-	submit := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-submissions", `{}`, false)
-	submit.Header.Set("Authorization", "Bearer worker-secret")
-	submitResponse := httptest.NewRecorder()
-	handler.ServeHTTP(submitResponse, submit)
-	if submitResponse.Code != http.StatusOK {
-		t.Fatalf("expected worker submit 200, got %d: %s", submitResponse.Code, submitResponse.Body.String())
-	}
-	spiMessageID := decodeBody(t, submitResponse.Body.Bytes())["data"].(map[string]any)["spi_message_id"].(string)
+	transferID, spiMessageID := createApprovedTransfer(t, handler, "idem-provider-signature")
 	payload := `{"spi_message_id":"` + spiMessageID + `","status":"accepted","code":"ACSC"}`
 
 	unsigned := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", payload, false)
@@ -120,6 +104,91 @@ func TestProviderCallbackRequiresValidSignature(t *testing.T) {
 	handler.ServeHTTP(signedResponse, signed)
 	if signedResponse.Code != http.StatusOK {
 		t.Fatalf("expected signed callback 200, got %d: %s", signedResponse.Code, signedResponse.Body.String())
+	}
+}
+
+func TestProviderCallbackRejectsStaleTimestamp(t *testing.T) {
+	handler := newTestHandler(20)
+	transferID, spiMessageID := createApprovedTransfer(t, handler, "idem-provider-stale")
+	payload := `{"spi_message_id":"` + spiMessageID + `","status":"accepted","code":"ACSC"}`
+
+	stale := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", payload, false)
+	stale.Header.Set("Authorization", "Bearer provider-secret")
+	signProviderCallbackAt(t, stale, payload, time.Now().UTC().Add(-10*time.Minute))
+	staleResponse := httptest.NewRecorder()
+	handler.ServeHTTP(staleResponse, stale)
+	if staleResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("expected stale callback 401, got %d: %s", staleResponse.Code, staleResponse.Body.String())
+	}
+	body := decodeBody(t, staleResponse.Body.Bytes())
+	message := body["error"].(map[string]any)["message"].(string)
+	if !strings.Contains(message, "outside tolerance") {
+		t.Fatalf("expected timestamp tolerance error, got %q", message)
+	}
+}
+
+func TestProviderCallbackReplaysSameTerminalCallback(t *testing.T) {
+	handler := newTestHandler(20)
+	transferID, spiMessageID := createApprovedTransfer(t, handler, "idem-provider-replay")
+	payload := `{"spi_message_id":"` + spiMessageID + `","status":"accepted","code":"ACSC"}`
+	signedAt := time.Now().UTC()
+
+	first := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", payload, false)
+	first.Header.Set("Authorization", "Bearer provider-secret")
+	signProviderCallbackAt(t, first, payload, signedAt)
+	firstResponse := httptest.NewRecorder()
+	handler.ServeHTTP(firstResponse, first)
+	if firstResponse.Code != http.StatusOK {
+		t.Fatalf("expected first callback 200, got %d: %s", firstResponse.Code, firstResponse.Body.String())
+	}
+	firstBody := decodeBody(t, firstResponse.Body.Bytes())
+	if firstBody["meta"].(map[string]any)["idempotent_replay"].(bool) {
+		t.Fatal("first callback must not be marked as idempotent replay")
+	}
+
+	replay := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", payload, false)
+	replay.Header.Set("Authorization", "Bearer provider-secret")
+	signProviderCallbackAt(t, replay, payload, signedAt)
+	replayResponse := httptest.NewRecorder()
+	handler.ServeHTTP(replayResponse, replay)
+	if replayResponse.Code != http.StatusOK {
+		t.Fatalf("expected replay callback 200, got %d: %s", replayResponse.Code, replayResponse.Body.String())
+	}
+	replayBody := decodeBody(t, replayResponse.Body.Bytes())
+	if !replayBody["meta"].(map[string]any)["idempotent_replay"].(bool) {
+		t.Fatal("expected replay callback to be marked as idempotent replay")
+	}
+	if replayBody["data"].(map[string]any)["status"] != "settled" {
+		t.Fatalf("expected replayed transfer to remain settled, got %+v", replayBody["data"])
+	}
+}
+
+func TestProviderCallbackRejectsConflictingTerminalReplay(t *testing.T) {
+	handler := newTestHandler(20)
+	transferID, spiMessageID := createApprovedTransfer(t, handler, "idem-provider-conflict")
+
+	acceptedPayload := `{"spi_message_id":"` + spiMessageID + `","status":"accepted","code":"ACSC"}`
+	accepted := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", acceptedPayload, false)
+	accepted.Header.Set("Authorization", "Bearer provider-secret")
+	signProviderCallback(t, accepted, acceptedPayload)
+	acceptedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(acceptedResponse, accepted)
+	if acceptedResponse.Code != http.StatusOK {
+		t.Fatalf("expected first callback 200, got %d: %s", acceptedResponse.Code, acceptedResponse.Body.String())
+	}
+
+	conflictingPayload := `{"spi_message_id":"` + spiMessageID + `","status":"rejected","code":"RJCT"}`
+	conflicting := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-callbacks", conflictingPayload, false)
+	conflicting.Header.Set("Authorization", "Bearer provider-secret")
+	signProviderCallback(t, conflicting, conflictingPayload)
+	conflictingResponse := httptest.NewRecorder()
+	handler.ServeHTTP(conflictingResponse, conflicting)
+	if conflictingResponse.Code != http.StatusConflict {
+		t.Fatalf("expected conflicting callback 409, got %d: %s", conflictingResponse.Code, conflictingResponse.Body.String())
+	}
+	body := decodeBody(t, conflictingResponse.Body.Bytes())
+	if body["error"].(map[string]any)["code"] != "conflict" {
+		t.Fatalf("expected conflict error envelope, got %+v", body)
 	}
 }
 
@@ -386,9 +455,36 @@ func decodeBody(t *testing.T, raw []byte) map[string]any {
 
 func signProviderCallback(t *testing.T, req *http.Request, body string) {
 	t.Helper()
-	timestamp := fmt.Sprintf("%d", time.Now().UTC().Unix())
+	signProviderCallbackAt(t, req, body, time.Now().UTC())
+}
+
+func signProviderCallbackAt(t *testing.T, req *http.Request, body string, signedAt time.Time) {
+	t.Helper()
+	timestamp := fmt.Sprintf("%d", signedAt.UTC().Unix())
 	req.Header.Set("X-PixRail-Timestamp", timestamp)
 	req.Header.Set("X-PixRail-Signature", providerCallbackSignature(testProviderCallbackSecret, timestamp, []byte(body)))
+}
+
+func createApprovedTransfer(t *testing.T, handler http.Handler, idempotencyKey string) (string, string) {
+	t.Helper()
+	create := request(handler, http.MethodPost, "/v1/pix/transfers", `{"account_id":"acct_123","amount_cents":12345,"currency":"BRL","receiver_key":"receiver@example.com","receiver_key_type":"EMAIL"}`, true)
+	create.Header.Set("Idempotency-Key", idempotencyKey)
+	createResponse := httptest.NewRecorder()
+	handler.ServeHTTP(createResponse, create)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("expected create 201, got %d: %s", createResponse.Code, createResponse.Body.String())
+	}
+	transferID := decodeBody(t, createResponse.Body.Bytes())["data"].(map[string]any)["id"].(string)
+
+	submit := request(handler, http.MethodPost, "/v1/pix/transfers/"+transferID+"/spi-submissions", `{}`, false)
+	submit.Header.Set("Authorization", "Bearer worker-secret")
+	submitResponse := httptest.NewRecorder()
+	handler.ServeHTTP(submitResponse, submit)
+	if submitResponse.Code != http.StatusOK {
+		t.Fatalf("expected worker submit 200, got %d: %s", submitResponse.Code, submitResponse.Body.String())
+	}
+	spiMessageID := decodeBody(t, submitResponse.Body.Bytes())["data"].(map[string]any)["spi_message_id"].(string)
+	return transferID, spiMessageID
 }
 
 func latencyPercentile(samples []time.Duration, quantile float64) time.Duration {
