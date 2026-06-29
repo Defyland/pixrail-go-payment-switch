@@ -135,6 +135,22 @@ Security coverage is documented in [docs/security/threat-model.md](docs/security
 
 Spec-driven readiness evidence is maintained in [docs/spec-driven](docs/spec-driven). Production hardening, runtime, rate limiting, serialization, scalability, and operational-cost analysis live in [docs/production-readiness.md](docs/production-readiness.md), [docs/runtime/gomaxprocs-kubernetes.md](docs/runtime/gomaxprocs-kubernetes.md), [docs/rate-limiting.md](docs/rate-limiting.md), [docs/benchmarks/serialization.md](docs/benchmarks/serialization.md), [docs/scalability.md](docs/scalability.md), and [docs/operational-cost.md](docs/operational-cost.md).
 
+## How to evaluate in 5 minutes
+
+Run the core reviewer path:
+
+```sh
+make verify
+```
+
+That checks formatting, `go vet`, race-tested coverage, binary builds, native
+benchmark smoke, `govulncheck`, and OpenAPI lint. If Docker and PostgreSQL are
+available, run the broader CI contract too:
+
+```sh
+make ci
+```
+
 ## How to run locally
 
 ```sh
@@ -202,8 +218,21 @@ PIXRAIL_DATABASE_URL='postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode
 ## How to run tests
 
 ```sh
+make verify
+```
+
+CI-grade local validation:
+
+```sh
+make ci
+```
+
+Direct commands remain available when you want one layer only:
+
+```sh
 go test ./...
-go test -bench=. ./internal/api
+go test -race -coverprofile=coverage.out ./...
+go test -bench=. -run '^$' -benchtime=1x ./internal/api
 gofmt -w cmd internal
 go vet ./...
 ```
@@ -212,7 +241,7 @@ Optional PostgreSQL integration test:
 
 ```sh
 PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:15432/pixrail?sslmode=disable' \
-  go test ./internal/postgres -run Integration
+  make integration-postgres
 ```
 
 ## Failure scenarios
