@@ -134,6 +134,7 @@ Security coverage is documented in [docs/security/threat-model.md](docs/security
 - Full Event Sourcing, Kubernetes, service mesh, CDC, and data-lake analytics are deferred until provider integrations and persistence are real.
 
 Spec-driven readiness evidence is maintained in [docs/spec-driven](docs/spec-driven). Production hardening, runtime, rate limiting, serialization, scalability, and operational-cost analysis live in [docs/production-readiness.md](docs/production-readiness.md), [docs/runtime/gomaxprocs-kubernetes.md](docs/runtime/gomaxprocs-kubernetes.md), [docs/rate-limiting.md](docs/rate-limiting.md), [docs/benchmarks/serialization.md](docs/benchmarks/serialization.md), [docs/scalability.md](docs/scalability.md), and [docs/operational-cost.md](docs/operational-cost.md).
+The hosted demo path is documented in [docs/deployment/railway.md](docs/deployment/railway.md).
 
 ## How to evaluate in 5 minutes
 
@@ -180,6 +181,8 @@ Compose is available for production-like process wiring:
 ```sh
 docker compose -f compose.yaml up --build
 ```
+
+For a public demo deployment path, see [docs/deployment/railway.md](docs/deployment/railway.md). Railway uses the existing Dockerfile and `/readyz` activation check.
 
 The Compose path starts PostgreSQL, applies migrations, starts the API, and starts `pixrail-worker`. The worker polls accepted transfers with `PIXRAIL_WORKER_BATCH_SIZE` and `PIXRAIL_WORKER_INTERVAL`, then uses the same claim-protected `SubmitPendingSPI` path exposed for local API-triggered simulation.
 

@@ -183,3 +183,29 @@ func TestLoadAllowsZeroPostgresMinConns(t *testing.T) {
 		t.Fatalf("expected postgres min conns to remain zero, got %d", cfg.PostgresMinConns)
 	}
 }
+
+func TestLoadUsesPortWhenHTTPAddrUnset(t *testing.T) {
+	t.Setenv("PIXRAIL_HTTP_ADDR", "")
+	t.Setenv("PORT", "19090")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if cfg.Addr != ":19090" {
+		t.Fatalf("expected addr from PORT, got %q", cfg.Addr)
+	}
+}
+
+func TestLoadPrefersExplicitHTTPAddrOverPort(t *testing.T) {
+	t.Setenv("PIXRAIL_HTTP_ADDR", ":18080")
+	t.Setenv("PORT", "19090")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if cfg.Addr != ":18080" {
+		t.Fatalf("expected explicit PIXRAIL_HTTP_ADDR to win, got %q", cfg.Addr)
+	}
+}

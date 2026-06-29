@@ -95,7 +95,7 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
-		Addr:                       getenv("PIXRAIL_HTTP_ADDR", ":8080"),
+		Addr:                       defaultHTTPAddr(),
 		Environment:                env,
 		StoreDriver:                getenv("PIXRAIL_STORE_DRIVER", "memory"),
 		DatabaseURL:                getenv("PIXRAIL_DATABASE_URL", ""),
@@ -221,6 +221,20 @@ func getenv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func defaultHTTPAddr() string {
+	if value := strings.TrimSpace(os.Getenv("PIXRAIL_HTTP_ADDR")); value != "" {
+		return value
+	}
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	if port == "" {
+		return ":8080"
+	}
+	if strings.HasPrefix(port, ":") {
+		return port
+	}
+	return ":" + port
 }
 
 func getenvIntAtLeast(key string, fallback int, min int) (int, error) {
