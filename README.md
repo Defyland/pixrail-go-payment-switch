@@ -270,3 +270,11 @@ PIXRAIL_POSTGRES_TEST_DSN='postgres://pixrail:pixrail@localhost:15432/pixrail?ss
 - add signed internal callbacks and processed-message inbox
 - add ClickHouse projection for risk and payment analytics
 - run k6 benchmarks against a Compose environment and publish measured artifacts per release
+
+## License
+
+This repository is published under the MIT License. See
+[LICENSE.txt](LICENSE.txt).
+
+That keeps the payment-switch contracts, failure handling, and operational
+documentation reusable for study and internal experiments.
